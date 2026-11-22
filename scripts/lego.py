@@ -11,8 +11,9 @@ verifier's report.  Python 3.8+, standard library only.  See ../SKILL.md.
   lego.py status [--wait SECONDS] [--images] [TASK_ID...]
   lego.py parts [--images]
   lego.py whoami
-  lego.py moc guide [--parts-file PATH]
-  lego.py moc submit [--title NAME] [--brief TEXT] [--design design.json] [--moc MOC_ID]
+  lego.py moc guide [--parts-file PATH | --parts 3001,3020,...]
+  lego.py moc find WORD...       look up supported part numbers by name (for a free build)
+  lego.py moc submit [--title NAME] [--brief TEXT] [--design design.json] [--moc MOC_ID] [--mode inventory|free]
                      [--parts-file PATH] [--no-wait] [--wait SECONDS] MODEL.ldr
   lego.py moc status [--wait SECONDS] [MOC_ID]
   lego.py mcp                    local MCP server (stdio) for agent hosts: see coord/api-skill.md 3.5
@@ -56,7 +57,7 @@ from pathlib import Path
 DEFAULT_SERVER = "https://lego.groundrl.com"
 PLACEHOLDER = "__LEGO_" + "SERVER__"  # split in two so the installer's replacement leaves it alone
 
-VERSION = "2.0"
+VERSION = "2.1"
 # Addresses older installs saved in user.json (HTTP and HTTPS on the server's IP). When the built-in address is
 # configured, a user.json that still names one of these follows the built-in one instead (coord/api-skill.md 3.7).
 LEGACY_SERVER_HOSTS = ("136.117.205.131",)
@@ -1313,6 +1314,11 @@ def connector_part_ids(rows):
 def cmd_moc_guide(ctx, rep, args):
     m = rep["moc"]
     inventory = arg_path(args.parts_file) if args.parts_file is not None else parts_path(ctx)
+    named = [p.strip().lower() for p in (args.parts or "").replace(";", ",").split(",") if p.strip()]
+    if named and args.parts_file is not None:
+        raise UsageError("use --parts or --parts-file, not both")
+    if len(named) > 400:
+        raise UsageError("--parts names {} parts; at most 400".format(len(named)))
     if args.parts_file is not None and not inventory.is_file():
         raise UsageError("parts file not found: " + args.parts_file)
     setup(ctx)
@@ -1324,14 +1330,18 @@ def cmd_moc_guide(ctx, rep, args):
     write_atomic(folder / "DESIGN_GUIDE.md", guide)
     m["guide_file"] = str(folder / "DESIGN_GUIDE.md")
     say("Design guide saved to", m["guide_file"])
-    rows, _, problem = load_inventory(ctx, inventory)
+    if named:   # free build: sheets of the parts named on the command line, no inventory needed
+        rows, problem = [{"ldraw_part": p[:-4] if p.endswith(".dat") else p} for p in named], None
+    else:
+        rows, _, problem = load_inventory(ctx, inventory)
     ids = connector_part_ids(rows)
     if not problem and not ids:
         problem = "{} has no rows with an LDraw part number".format(inventory.name)
     if problem:
         msg = ("connectors.txt was not fetched: connector sheets are fetched for the parts in an inventory, and "
-               "{} ({}). Scan your parts first ({}), or pass --parts-file.".format(
-                   problem, inventory, script_cmd("scan PHOTO...")))
+               "{} ({}). Scan your parts first ({}), or pass --parts-file. For a free build (not limited to the "
+               "inventory) name the parts: {}.".format(
+                   problem, inventory, script_cmd("scan PHOTO..."), script_cmd("moc guide --parts 3001,3020")))
         rep["errors"].append(msg)
         say("ERROR:", msg)
         return EXIT_ERROR
@@ -1355,12 +1365,38 @@ def cmd_moc_guide(ctx, rep, args):
     m.update(connectors_file=str(path), connector_parts=len(ids), unsupported_parts=unsupported)
     say("Connector sheets for {} part(s) saved to {}".format(len(ids) - len(unsupported), path))
     if unsupported:
-        say("WARNING: {} part(s) in the inventory are not supported for design (no connector sheet; don't build "
+        say("WARNING: {} part(s) are not supported for design (no connector sheet; don't build "
             "with them): {}{}".format(len(unsupported), ", ".join(unsupported[:20]),
                                       " ..." if len(unsupported) > 20 else ""))
+    if named:
+        say("Next: read both files, write an LDraw model (free build: any supported part, any colour), then run: "
+            + script_cmd("moc submit model.ldr --mode free"))
+        return EXIT_OK
     say("Next: read both files, write an LDraw model using only designable rows of {} (at most `quantity` of "
         "each), then run: {}".format(inventory, script_cmd("moc submit model.ldr" + (
             ' --parts-file "{}"'.format(inventory) if args.parts_file is not None else ""))))
+    return EXIT_OK
+
+
+def cmd_moc_find(ctx, rep, args):
+    """Supported parts whose LDraw name has every word (or whose number starts with it): for a free build."""
+    query = " ".join(args.words).strip()
+    if not query or len(query) > 80:
+        raise UsageError("give 1-80 characters: words from the part name (e.g. slope 45 2 x 2) or a part number")
+    setup(ctx)
+    path = "/moc/parts?" + urllib.parse.urlencode({"q": query, "offset": args.offset, "limit": 100})
+    data = not_ready_retry(ctx, lambda: api(ctx, "GET", path, auth=False))
+    parts = [p for p in (data.get("parts") or []) if isinstance(p, dict)]
+    say("{} supported part(s) match '{}'{}".format(data.get("total", len(parts)), query,
+                                                  "; showing {}-{}".format(args.offset + 1, args.offset + len(parts))
+                                                  if parts else ""))
+    for p in parts:
+        say("{} | {}".format(p.get("ldraw_part"), p.get("name") or ""))
+    if parts and args.offset + len(parts) < (data.get("total") or 0):
+        say("More: add --offset {}, or add a word to narrow it.".format(args.offset + len(parts)))
+    if parts:
+        say("Next: fetch the connector sheets of the parts you choose: " + script_cmd("moc guide --parts 3001,3020"))
+    rep["moc"]["found_parts"] = [p.get("ldraw_part") for p in parts]
     return EXIT_OK
 
 
@@ -1395,11 +1431,19 @@ def cmd_moc_submit(ctx, rep, args):
         raise UsageError("--brief has {} characters; at most {}".format(len(brief), MAX_BRIEF_CHARS))
     model, model_bytes, part_lines = read_model(args.model)
     design = read_design(args.design) if args.design is not None else None
-    parts_body = read_parts_upload(ctx, args.parts_file)
+    free = args.mode == "free"
+    if free and args.parts_file is not None:
+        raise UsageError("--mode free is not checked against an inventory: leave out --parts-file")
+    # no mode and no local inventory: the server decides (its own inventory of this ID; free when that is empty)
+    send_parts = not free and (args.mode == "inventory" or args.parts_file is not None or parts_path(ctx).is_file())
+    parts_body = read_parts_upload(ctx, args.parts_file) if send_parts else None
     setup(ctx)
     ensure_user(ctx)
-    fields = [("model", model.name, "text/plain; charset=utf-8", model_bytes),
-              ("parts", "parts.json", "application/json", parts_body)]
+    fields = [("model", model.name, "text/plain; charset=utf-8", model_bytes)]
+    if parts_body is not None:
+        fields.append(("parts", "parts.json", "application/json", parts_body))
+    if args.mode:
+        fields.append(("mode", None, None, args.mode.encode("ascii")))
     if design is not None:
         fields.append(("design", "design.json", "application/json", design))
     if args.moc:
@@ -1429,7 +1473,8 @@ def cmd_moc_submit(ctx, rep, args):
     copy = moc_dir(ctx) / moc_id / "v{}.ldr".format(version)
     write_atomic(copy, model_bytes)
     target["model_file"] = str(copy)
-    line = "Accepted as MOC {} version {}".format(moc_id, version)
+    line = "Accepted as MOC {} version {}{}".format(
+        moc_id, version, " (free build: not checked against the inventory)" if resp.get("mode") == "free" else "")
     if resp.get("queue_ahead") is not None:
         line += ", {} ahead in the queue".format(resp["queue_ahead"])
     if resp.get("eta_s") is not None:
@@ -1630,6 +1675,9 @@ def print_moc(ctx, t):
     if data.get("title"):
         say("Title:", data["title"])
     print_usage(data)
+    if data.get("mode") == "free":
+        say("Mode: free build. Not checked against the inventory; tell the user the model is not limited to their "
+            "parts, the page's parts list is what they would need to get, and a part may not exist in every colour.")
     if status == "failed":
         stats = (report or {}).get("stats")
         if isinstance(stats, dict) and stats:
@@ -1747,7 +1795,7 @@ def moc_exit_code(rep):
 
 
 MOC_KEYS = ("moc_id", "version", "status", "url", "fails", "warnings", "report_file", "result_file", "title",
-            "parts", "steps", "model_file", "usage", "previews")
+            "parts", "steps", "model_file", "usage", "previews", "mode")
 
 
 def moc_fields(ctx, t):
@@ -1761,7 +1809,8 @@ def moc_fields(ctx, t):
             "title": data.get("title"), "parts": data.get("parts"), "steps": data.get("steps"),
             "model_file": t["model_file"] or local_model_copy(ctx, t),
             "usage": {k: usage.get(k) for k in ("used", "usable", "percent", "target_percent")} if usage else None,
-            "previews": [p for p in data.get("previews") or [] if isinstance(p, str)]}
+            "previews": [p for p in data.get("previews") or [] if isinstance(p, str)],
+            "mode": data.get("mode") if data.get("mode") in ("inventory", "free") else None}
 
 
 def moc_result(ctx, rep, code):
@@ -1800,12 +1849,18 @@ MCP_LIST_TIMEOUT_S = 15
 MCP_CALL_TIMEOUT_S = 120   # the server answers every tool call within 50 s; the rest is slack for slow links
 MCP_WORKERS = 8            # tool calls run in parallel, so a ping or a short call never waits behind a long one
 MCP_EOF_GRACE_S = 10.0     # on end of input, running calls get this long to finish
-MCP_READ_ONLY = ("scan_status", "inventory", "design_guide", "connectors", "moc_status")  # safe to send twice
+MCP_READ_ONLY = ("scan_status", "inventory", "design_guide", "connectors", "find_parts", "moc_status")  # safe to send twice
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 
 MCP_INSTRUCTIONS = (
     "lego-moc turns photos of loose LEGO parts into an inventory, then checks a LEGO model (MOC) that you design "
-    "from that inventory as an LDraw file; a passing model gets a public page with a 3D view and building steps. "
+    "as an LDraw file; a passing model gets a public page with a 3D view and building steps. Two design modes: "
+    "inventory (default: only parts the user owns) and free (free build: any supported LDraw part in any colour "
+    "and quantity, same physics check). Use free only when the user asks for it (free build, unlimited parts, "
+    "自由创作, 不限零件) or design_guide reports default_mode free (no usable parts); never switch to it on your own "
+    "because the inventory is short, offer it instead. In a free build look up part numbers with find_parts, pass "
+    "mode=free to submit_model, aim for the strongest design the 400-part limit allows, and tell the user the model "
+    "is not limited to their parts, its parts list is a shopping list, and a part may not exist in every colour. "
     "Flow: scan_photos (absolute paths of photos on this computer) -> scan_status with wait_s=50 until pending is 0 "
     "-> inventory -> edit_inventory only on the user's word -> design_guide, then connectors for the parts you plan "
     "to use -> submit_model (pass the user's request as brief) -> moc_status while it is not finished. "
@@ -1814,7 +1869,7 @@ MCP_INSTRUCTIONS = (
     "misidentified: rely on them only after the user confirms them (edit_inventory op confirm). Say a model can be "
     "built only when its status is passed; passing means it is physically consistent in the verifier's simulation, "
     "not that the real build is guaranteed to hold. The model link is public. At most 5 resubmissions per model. "
-    "Use only usable parts. Design comes first: a recognisable subject and a planned colour scheme (one dominant, "
+    "In inventory mode use only usable parts. Design comes first: a recognisable subject and a planned colour scheme (one dominant, "
     "one secondary, one accent colour from what the inventory has most of). Use many parts to add detail and "
     "presence (a rich model often uses about 60% of the usable pieces), never to pad: a pyramid, tower or block of "
     "mixed colours that just uses up the inventory is a failure; leave out parts that would spoil the design. "
@@ -1849,7 +1904,7 @@ SCAN_PHOTOS_TOOL = {
 
 
 def offline_tools():
-    """A copy of the server's tool list (app/skill/mcp.py tools(), 2.0.0), for when the live list cannot be fetched
+    """A copy of the server's tool list (app/skill/mcp.py tools(), 2.1.0), for when the live list cannot be fetched
     (server unreachable). Calls are still forwarded; the real list replaces this one once the server answers."""
     return (
     [{'name': 'scan_status',
@@ -1948,18 +2003,21 @@ def offline_tools():
      {'name': 'design_guide',
       'title': 'Design guide',
       'description': 'The design guide for LDraw models this server can check: file format, coordinates, how parts '
-                     'connect, every check rule and how to declare moving parts. Also returns the size of this '
-                     "ID's usable inventory and the usage target. Read it before writing a model. Rules: design "
-                     'only with usable parts unless the user says otherwise. Design first (subject, silhouette, '
-                     'colour plan), then use many parts for detail and presence; about 60% usage is a gauge of a '
-                     'rich model, not a quota, and never a reason to pad.',
+                     'connect, every check rule, the two design modes and how to declare moving parts. Also '
+                     "returns the size of this ID's usable inventory, the usage target and default_mode: "
+                     '"inventory", or "free" when this ID has no usable parts. Read it before writing a model. '
+                     'Rules: in inventory mode design only with usable parts unless the user says otherwise; use '
+                     'free mode only when the user asks for a free build or default_mode is free. Design first '
+                     '(subject, silhouette, colour plan), then use many parts for detail and presence; about 60% '
+                     'usage is a gauge of a rich model, not a quota, and never a reason to pad.',
       'inputSchema': {'type': 'object', 'properties': {}},
       'annotations': {'readOnlyHint': True, 'openWorldHint': False}},
      {'name': 'connectors',
       'title': 'Connector sheets',
       'description': "Connector sheets for 1-40 LDraw part numbers: each part's bounding box and every connector "
                      "(type, position, axis, length) in the part's own coordinates. Compute part positions in a "
-                     'model from these. Parts listed in unsupported cannot be checked: do not use them.',
+                     'model from these. Parts listed in unsupported cannot be checked: do not use them. Long '
+                     'answers are cut: parts listed in deferred were left out, call connectors again with them.',
       'inputSchema': {'type': 'object',
                       'required': ['parts'],
                       'properties': {'parts': {'type': 'array',
@@ -1968,16 +2026,36 @@ def offline_tools():
                                                'maxItems': 40,
                                                'description': 'LDraw part numbers, e.g. ["3001", "3020"].'}}},
       'annotations': {'readOnlyHint': True, 'openWorldHint': False}},
+     {'name': 'find_parts',
+      'title': 'Find supported parts',
+      'description': 'Look up LDraw part numbers the verifier supports, for a free build (mode "free") where the '
+                     'model is not limited to the inventory. query: words that must all appear in the LDraw part '
+                     'name (e.g. "slope 45 2 x 2", "wheel", "plate 1 x 4", "window"), or the start of a part '
+                     'number. Returns up to limit matches (number and name), plain parts before printed variants; '
+                     'page with offset. Then get the connector sheets of the parts you choose with connectors. A '
+                     'part that is not found here cannot be used in a model.',
+      'inputSchema': {'type': 'object',
+                      'required': ['query'],
+                      'properties': {'query': {'type': 'string',
+                                               'maxLength': 80,
+                                               'description': 'Words from the part name, or a part number prefix.'},
+                                     'offset': {'type': 'integer', 'minimum': 0, 'default': 0},
+                                     'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100, 'default': 40}}},
+      'annotations': {'readOnlyHint': True, 'openWorldHint': False}},
      {'name': 'submit_model',
       'title': 'Check a model',
       'description': "Submit an LDraw model (the full text of a flat .ldr file: '1' part lines and '0' comments, "
-                     "no sub-models, no steps) to be checked against this ID's current inventory (with edits) by "
-                     'the physics verifier. Waits up to wait_s seconds (default 45) for the verdict; if status is '
-                     'still queued, checking or stepping, call moc_status with the moc_id. Pass moc_id to submit a '
-                     "corrected version of an earlier model. brief is the user's request in their own words (shown "
-                     'on the page). design is the optional design.json object (title, description, motions) '
-                     "described in the guide. The result has the issues with the file's line numbers, the "
-                     'inventory usage and, when the model passed, its public page url and two preview pictures. '
+                     'no sub-models, no steps) to be checked by the physics verifier. mode "inventory" also checks '
+                     'it against this ID\'s current inventory (with edits); mode "free" (free build) allows any '
+                     'supported part in any colour and quantity and skips the inventory check: pass it only when '
+                     'the user asked for a free build or has no usable parts. Without mode: a new model is '
+                     'inventory (free when this ID has no usable parts), a new version keeps the mode of the '
+                     'model. Waits up to wait_s seconds (default 45) for the verdict; if status is still queued, '
+                     'checking or stepping, call moc_status with the moc_id. Pass moc_id to submit a corrected '
+                     "version of an earlier model. brief is the user's request in their own words (shown on the "
+                     'page). design is the optional design.json object (title, description, motions) described in '
+                     "the guide. The result has the issues with the file's line numbers, the inventory usage "
+                     '(inventory mode) and, when the model passed, its public page url and two preview pictures. '
                      'Rules: only say the model can be built, is valid or works when status is "passed". On '
                      '"failed", fix the lines named in issues and submit again with the same moc_id (at most 5 '
                      'resubmissions; then stop and tell the user honestly which rules still fail on which parts). '
@@ -1996,6 +2074,10 @@ def offline_tools():
                                      'moc_id': {'type': 'string',
                                                 'description': 'An earlier model of this ID: makes a new version '
                                                                'of it.'},
+                                     'mode': {'type': 'string',
+                                              'enum': ['inventory', 'free'],
+                                              'description': 'inventory = only parts the user owns; free = free '
+                                                             'build, any supported part.'},
                                      'design': {'type': 'object',
                                                 'description': 'design.json: {title, description, motions[]}.'},
                                      'wait_s': {'type': 'integer',
@@ -2699,13 +2781,22 @@ def build_parser():
     moc_sub.required = True
     guide = moc_sub.add_parser("guide", help="download the design guide and the connector sheets of your parts")
     guide.add_argument("--parts-file", metavar="PATH", help="inventory to use instead of parts.json")
+    guide.add_argument("--parts", metavar="LIST", help="comma-separated LDraw part numbers to fetch connector sheets "
+                                                       "for instead of the inventory's (free build)")
     guide.set_defaults(func=cmd_moc_guide)
+    find = moc_sub.add_parser("find", help="look up supported part numbers by name words (free build)")
+    find.add_argument("words", nargs="+", metavar="WORD", help="words from the LDraw part name, or a part number prefix")
+    find.add_argument("--offset", type=int, default=0, metavar="N", help="skip the first N matches")
+    find.set_defaults(func=cmd_moc_find)
     submit = moc_sub.add_parser("submit", help="submit an LDraw model for the check and wait for the result")
     submit.add_argument("model", metavar="MODEL.ldr", help="the LDraw model file")
     submit.add_argument("--title", metavar="NAME", help="name of the model, at most 80 characters")
     submit.add_argument("--brief", metavar="TEXT", help="the user's request in their own words, at most 500 characters")
     submit.add_argument("--design", metavar="design.json", help="optional design file (title, description, motions)")
     submit.add_argument("--moc", metavar="MOC_ID", help="submit a new version of this existing MOC")
+    submit.add_argument("--mode", choices=("inventory", "free"),
+                        help="inventory: only parts you own (default); free: free build, any supported part in any "
+                             "colour and quantity, not checked against the inventory")
     submit.add_argument("--parts-file", metavar="PATH", help="inventory to send instead of parts.json")
     submit.add_argument("--no-wait", action="store_true", help="return right after submitting")
     submit.add_argument("--wait", type=wait_seconds, default=MOC_WAIT_S, metavar="SECONDS",

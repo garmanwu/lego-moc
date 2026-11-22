@@ -2,7 +2,7 @@
 
 An agent skill that turns photos of loose LEGO parts into a parts inventory, then lets your agent design a model (MOC) from those parts and have it checked and rendered.
 
-拍照识别散装乐高零件，生成零件清单；再让 agent 用这些零件设计作品（MOC），由服务器检验能否拼出来，通过后给出带 3D 预览和拼装步骤的链接。
+拍照识别散装乐高零件，生成零件清单；再让 agent 用这些零件设计作品（MOC），由服务器检验能否拼出来，通过后给出带 3D 预览和拼装步骤的链接。2.1 起支持自由创作：没有零件，或者不想受库存限制时，可以用全部 LDraw 零件设计，同样要过物理检验。
 
 Works with any agent that can run Python 3 and reach the internet: Claude Code, Codex, WorkBuddy, OpenClaw and others. Since 2.0 the agent can use it through MCP tools instead of shell commands, which means far fewer approval prompts.
 
@@ -10,6 +10,7 @@ Works with any agent that can run Python 3 and reach the internet: Claude Code, 
 
 1. **Scan.** The agent uploads 1–30 photos. The server finds each part, identifies its LDraw part number and colour, and keeps the inventory under your user ID. You can correct it afterwards: change a quantity, delete a row, or confirm a part the server was unsure of.
 2. **Design and verify.** The agent designs a model from that inventory and writes it as an LDraw file. The server checks that the parts really connect and the model holds together. If not, it returns fix notes that name the offending lines. If it passes, it returns a public link with a 3D view and step-by-step building instructions, plus two preview pictures and how much of your inventory the model uses.
+3. **Free build (new in 2.1).** No parts, or want something bigger than your collection? Ask for a free build ("free build", "unlimited parts", 「自由创作」「不限零件」). The agent designs with any of about 14,000 LDraw parts in any colour and quantity, and the model goes through the same physics check. The page's parts list is then the list of what you would need to get. Examples: [yellow submarine](https://lego.groundrl.com/skill/moc/mujtuwfmzc9dvkn3t8gnu), [castle](https://lego.groundrl.com/skill/moc/md2jkmb7bqy7jfb53ce5a), [pagoda](https://lego.groundrl.com/skill/moc/mfda4ucr3qm6ev6p73z3s). The verifier does not know which part exists in which colour as a real element. Models have 10 to 400 parts.
 
 ## Install
 

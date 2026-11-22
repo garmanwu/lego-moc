@@ -1,7 +1,7 @@
 ---
 name: lego-moc
-description: Recognise loose LEGO parts from photos into a parts inventory, then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public page with a 3D preview and step-by-step building instructions. Works through MCP tools (scan_photos, inventory, submit_model and others) or a fallback Python script. Use when the user wants to identify, scan or count LEGO pieces from photos, build, show or correct a parts inventory, design or build a MOC from parts they own (a car, a house, a description, a picture), check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 2.0.1
+description: Recognise loose LEGO parts from photos into a parts inventory, then design a LEGO model (MOC) as an LDraw file - from the parts the user owns, or as a free build with unlimited parts - and have a server verify it physically - it returns fix notes, or a public page with a 3D preview and step-by-step building instructions. Works through MCP tools (scan_photos, inventory, submit_model and others) or a fallback Python script. Use when the user wants to identify, scan or count LEGO pieces from photos, build, show or correct a parts inventory, design or build a MOC from parts they own or as a free build without an inventory (a car, a house, a description, a picture), check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 自由创作, 不限零件设计乐高, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
+version: 2.1.0
 metadata:
   openclaw:
     emoji: "🧱"
@@ -24,7 +24,8 @@ metadata:
 Two stages:
 
 1. **Scan.** The user photographs loose parts; the server recognises them and keeps the inventory (per user ID).
-2. **Design and verify.** You design a model (MOC) from that inventory and write it as an LDraw file. The server
+2. **Design and verify.** You design a model (MOC) and write it as an LDraw file: by default from that inventory,
+   or as a **free build** with any parts when the user asks for one or has no parts scanned (section 4b). The server
    checks it physically: on failure it names the offending lines; on a pass it publishes a page with a 3D view and
    step-by-step building instructions. The server designs nothing: the design is yours.
 
@@ -36,8 +37,8 @@ There are two ways to work. **MCP tools** (section 2) need no shell commands; us
 Look in your tool list for these names, usually shown under a server prefix such as `lego-moc` (for example
 `mcp__lego-moc__scan_photos` or `lego-moc.scan_photos`):
 
-`scan_photos`, `scan_status`, `inventory`, `edit_inventory`, `design_guide`, `connectors`, `submit_model`,
-`moc_status`
+`scan_photos`, `scan_status`, `inventory`, `edit_inventory`, `design_guide`, `connectors`, `find_parts`,
+`submit_model`, `moc_status`
 
 - **All present:** work as in section 2.
 - **All but `scan_photos`:** the host uses the remote server endpoint, which cannot read files on this computer.
@@ -101,7 +102,8 @@ it with your own HTTP calls.
    inventory can carry it before you design.
 6. **`design_guide`**: read the whole guide before your first design in a conversation. It is the server's current
    rule book: file format, coordinates, which connectors mate, the verifier's rules, worked examples and how to use
-   many parts. It also returns `usable_quantity` and `target_percent`.
+   many parts. It also returns `usable_quantity`, `target_percent` and `default_mode` (`inventory`, or `free` when
+   the user has no usable parts: then design a free build, section 4b).
 7. **`connectors`** `{"parts": ["3001", "3023", ...]}` (1–40 LDraw part numbers per call): the bounds and every
    connector of each part you plan to use. Take every part's origin and connector positions from here; never guess
    them. A part reported as `unsupported` cannot be used.
@@ -112,8 +114,8 @@ it with your own HTTP calls.
 ### Verify and improve
 
 9. **`submit_model`** `{"ldr": "<the whole file>", "title": "...", "brief": "<the user's request, their words>"}`;
-   add `"moc_id"` to submit a new version of the same model, and `"design"` only for declared moving parts (see the
-   guide). It waits up to `wait_s` (default 45) and returns `status`, the `issues` (each fail names the rule, a hint,
+   add `"moc_id"` to submit a new version of the same model, `"design"` only for declared moving parts (see the
+   guide), and `"mode": "free"` for a free build (section 4b). It waits up to `wait_s` (default 45) and returns `status`, the `issues` (each fail names the rule, a hint,
    and the parts with their file line and position), `usage`, `resubmissions_left` and, on a pass, `url` and two
    preview pictures. If `status` is not final yet (`queued`, `checking`, `stepping`), call **`moc_status`**
    `{"moc_id": ..., "wait_s": 50}`. Status `error` is a server-side failure, not a design problem: submit the same
@@ -179,6 +181,29 @@ beats it every time.
   "the 14 orange and lime pieces would have clashed"). If more parts of some colour or shape would lift the model,
   say which, so they know what to scan next.
 
+## 4b. Free build (unlimited parts)
+
+By default a model is designed from the user's inventory, so that they can build it from what they own. A **free
+build** drops that limit: any LDraw part the verifier supports, in any colour and quantity. The physics check is the
+same, and so are the page, the previews and the building steps.
+
+- **When.** The user asks for it ("free build", "unlimited parts", "don't limit it to my parts", "自由创作",
+  "不限零件", "无限零件"), or the user has no usable parts (`design_guide` returns `default_mode: "free"`). If the user
+  has parts and did not ask, stay in inventory mode. When the inventory is too thin for the request, don't switch
+  on your own: say what the inventory allows and offer a free build as the alternative.
+- **How.** Skip the inventory. Read `design_guide` (section 10 is about free builds). Look part numbers up by name
+  with **`find_parts`** `{"query": "slope 45 2 x 2"}`, get their sheets with `connectors`, and submit with
+  `"mode": "free"`. Later versions of the model keep the mode. There is no `usage` in the result. Limits that
+  stay: 10 to 400 parts, and only supported parts (a part `find_parts` does not find cannot be used).
+- **Design for effect.** Nothing holds the design back now, so make it the best you can: pick the right part for
+  every place (slopes, curved slopes, tiles, arches, windows, wheels, transparent parts), a disciplined palette
+  (dominant, secondary, accent, plus neutrals), real proportions, detail, depth and a scene. A showpiece usually
+  needs 150 to 400 parts. Everything in section 4 about concept, colour plan, staging and reviewing the previews
+  applies; padding is as wrong here as there.
+- **Tell the user** that this is a free build, not limited to their parts; that the parts list on the page is what
+  they would need to get; and that the verifier does not know which part exists in which colour as a real LEGO
+  element, so some may not be obtainable in that colour.
+
 ## 5. Script fallback
 
 Use the script when the MCP tools are not available. Python 3.8+, standard library only, nothing to install.
@@ -206,8 +231,9 @@ write outside the workspace. So:
 | `status [--wait SECONDS] [--images] [TASK_ID...]` | Checks the pending tasks (or the given ones) once, or keeps polling up to SECONDS. Saves finished ones. |
 | `parts [--images]` | Saves finished pending tasks, then reloads the whole inventory (with the edits made on the inventory page or with `edit_inventory`) into `parts.json`. |
 | `whoami` | Shows the user ID, server and local folder. No network. |
-| `moc guide [--parts-file PATH]` | Saves the design guide `moc/DESIGN_GUIDE.md` and the connector sheets of your parts `moc/connectors.txt`. |
-| `moc submit [--title NAME] [--brief TEXT] [--design design.json] [--moc MOC_ID] [--parts-file PATH] [--no-wait] [--wait SECONDS] MODEL.ldr` | Sends the model with `parts.json`, waits up to 300 s (default) for the check and prints the result, the parts usage and, on a pass, the preview links. `--moc` submits a new version of an existing MOC; `--brief` is the user's request. |
+| `moc guide [--parts-file PATH \| --parts 3001,3020,...]` | Saves the design guide `moc/DESIGN_GUIDE.md` and the connector sheets of your parts `moc/connectors.txt`. `--parts` fetches the sheets of the named parts instead (free build; no inventory needed). |
+| `moc find WORD...` | Free build: lists supported part numbers whose LDraw name has every word (e.g. `moc find slope 45 2 x 2`). |
+| `moc submit [--title NAME] [--brief TEXT] [--design design.json] [--moc MOC_ID] [--mode inventory\|free] [--parts-file PATH] [--no-wait] [--wait SECONDS] MODEL.ldr` | Sends the model with `parts.json` (`--mode free`: a free build, no inventory sent or checked), waits up to 300 s (default) for the check and prints the result, the parts usage and, on a pass, the preview links. `--moc` submits a new version of an existing MOC; `--brief` is the user's request. |
 | `moc status [--wait SECONDS] [MOC_ID]` | Checks the pending MOC submissions (or the given one) once, or keeps polling up to SECONDS. |
 | `mcp-config [--remote]` | Prints the JSON for the MCP setup (section 1). Output is only that JSON; no RESULT line. |
 | `mcp` | The MCP bridge itself. The agent host runs it; don't run it yourself. |
@@ -242,7 +268,7 @@ of the text above it. Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pe
 `inventory_url`, `inventory_image`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
 `passed`, `failed`, `error`; null when nothing was checked), `url`, `fails` and `warnings` (counts), `report_file`,
 `result_file`, `model_file`, `parts`, `steps`, `title`, `usage` (`used`, `usable`, `percent`, `target_percent`),
-`previews`, `errors`; `moc guide` adds `guide_file`, `connectors_file`, `unsupported_parts`.
+`previews`, `mode` (`inventory` or `free`), `errors`; `moc guide` adds `guide_file`, `connectors_file`, `unsupported_parts`.
 
 ### Scanning with the script
 
@@ -271,6 +297,9 @@ of the text above it. Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pe
    `line <n>: <part> colour <c> at (x, y, z)`; line numbers count every line of the submitted file from 1 (copy in
    `moc/<moc_id>/v<N>.ldr`, all parts in `report_file`). Fix those lines and submit a new version:
    `lego.py moc submit model.ldr --moc <moc_id>`.
+   **Free build** (section 4b): `lego.py moc find <words>` to look up part numbers, `lego.py moc guide --parts
+   3001,3020,...` for their sheets (it rewrites `moc/connectors.txt`: name every part you use), then
+   `lego.py moc submit model.ldr --mode free ...`.
 5. **Exit 0:** passed. Read the `Parts used` line and the preview links, then refine as section 4 says, with
    `--moc <moc_id>`. **Exit 3:** `lego.py moc status <moc_id> --wait 300`. **Exit 1** with `status: "error"`: a
    server-side failure; submit the same file again with `--moc`. Any other exit 1: report the `ERROR:` line (e.g.
@@ -282,6 +311,8 @@ of the text above it. Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pe
   soften it. The same for failed photos, rejected and not uploaded files (with reasons) and every verifier warning.
 - **Pictures, not part numbers.** When you present the inventory, show the overview picture and give
   `inventory_url`.
+- **Inventory mode is the default.** A free build only when the user asks for one or has no usable parts; say
+  clearly in your report which mode the model is in.
 - **Low-confidence rows** may be misidentified: build with them only after the user confirmed them (MCP:
   `edit_inventory` `confirm`; the user can also confirm on the inventory page). Never use `designable: false` rows.
 - **Edits only on the user's word.**
