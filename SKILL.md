@@ -1,7 +1,7 @@
 ---
 name: lego-moc
 description: Recognise loose LEGO parts from 1-30 photos into an inventory (~/.lego-parts/parts.json, shared by all agents), then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public link with a 3D preview and step-by-step building instructions. Use when the user wants to identify, scan or count LEGO pieces from photos, build or update a parts inventory, design or build a MOC from parts they own, check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 1.0.0
+version: 1.0.1
 metadata:
   openclaw:
     emoji: "🧱"
@@ -57,6 +57,11 @@ On Windows use `python` or `py -3`. Put options before the photo list.
 - **Server address.** Normally built into the downloaded script. If a command says no server is configured,
   the user must set `LEGO_PARTS_SERVER` (e.g. `http://203.0.113.7`, without `/skill/v1`).
   `LEGO_PARTS_HOME` changes the local folder.
+
+- **Blocked network.** If a command reports `HTTP 403 ... not from the LEGO server` or cannot reach the server,
+  your sandbox, proxy or firewall is blocking it. Ask the user to allow network access to the server's host, then
+  run the same command again. Do not call the API by hand with curl to work around it: new IDs are limited to
+  5 per network per day, and results are only saved when the script itself runs.
 
 ## Exit codes and output
 

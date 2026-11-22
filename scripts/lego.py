@@ -48,7 +48,7 @@ from pathlib import Path
 DEFAULT_SERVER = "http://136.117.205.131"
 PLACEHOLDER = "__LEGO_" + "SERVER__"  # split in two so the installer's replacement leaves it alone
 
-VERSION = "0.2"
+VERSION = "0.3"
 API_PREFIX = "/skill/v1"
 MAX_PHOTOS = 30
 MAX_PHOTO_BYTES = 25 * 1024 * 1024
@@ -399,14 +399,23 @@ def is_refused(reason):
     return isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) == errno.ECONNREFUSED
 
 
-def error_from_response(status, raw):
+def error_from_response(status, raw, host=""):
     code = message = None
     try:
         err = json.loads(raw.decode("utf-8"))["error"]
         code, message = err.get("code"), err.get("message")
     except (ValueError, KeyError, TypeError, AttributeError):
         pass
-    return ApiError(status, code or "http_{}".format(status), message or "HTTP {} from the server".format(status))
+    if code or message:
+        return ApiError(status, code or "http_{}".format(status), message or "HTTP {} from the server".format(status))
+    if status in (403, 407, 451):
+        # The LEGO server always answers errors with its JSON envelope and never with these codes.
+        return ApiError(status, "blocked", (
+            "HTTP {0} for {1}, and the reply is not from the LEGO server: a sandbox, proxy or firewall on the way "
+            "answered instead. Allow network access to {1} (or run this command outside the sandbox, or bypass "
+            "the proxy for this host), then run the same command again. Do not call the server by hand to work "
+            "around it: every extra new-ID request counts against a small daily limit.").format(status, host))
+    return ApiError(status, "http_{}".format(status), "HTTP {} from the server".format(status))
 
 
 def http_request(method, url, body=None, headers=None, timeout=TIMEOUT_S):
@@ -423,7 +432,7 @@ def http_request(method, url, body=None, headers=None, timeout=TIMEOUT_S):
             raw = e.read()
         except (OSError, http.client.HTTPException):
             raw = b""
-        raise error_from_response(e.code, raw)
+        raise error_from_response(e.code, raw, urllib.parse.urlparse(url).netloc)
     except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
         reason = getattr(e, "reason", e)
         host = urllib.parse.urlparse(url).netloc

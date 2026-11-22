@@ -22,7 +22,7 @@ git clone https://github.com/garmanwu/lego-moc ~/.claude/skills/lego-moc
 With ClawHub:
 
 ```bash
-clawhub install lego-moc
+clawhub install @garmanwu/lego-moc
 ```
 
 Or copy `SKILL.md` and `scripts/lego.py` into a folder named `lego-moc` wherever your agent keeps skills.
