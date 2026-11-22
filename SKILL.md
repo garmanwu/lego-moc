@@ -1,7 +1,7 @@
 ---
 name: lego-moc
 description: Recognise loose LEGO parts from 1-30 photos into an inventory (~/.lego-parts/parts.json, shared by all agents), then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public link with a 3D preview and step-by-step building instructions. Use when the user wants to identify, scan or count LEGO pieces from photos, build or update a parts inventory, design or build a MOC from parts they own, check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 1.0.1
+version: 1.1.0
 metadata:
   openclaw:
     emoji: "🧱"
@@ -55,7 +55,7 @@ On Windows use `python` or `py -3`. Put options before the photo list.
   `status --wait 100` / `moc status --wait 100`. Being stopped mid-wait is safe: IDs are saved in `pending.json` /
   `moc/pending.json` first, and any later command, from any agent, collects them.
 - **Server address.** Normally built into the downloaded script. If a command says no server is configured,
-  the user must set `LEGO_PARTS_SERVER` (e.g. `http://203.0.113.7`, without `/skill/v1`).
+  the user must set `LEGO_PARTS_SERVER` (e.g. `https://203.0.113.7`, without `/skill/v1`).
   `LEGO_PARTS_HOME` changes the local folder.
 
 - **Blocked network.** If a command reports `HTTP 403 ... not from the LEGO server` or cannot reach the server,
@@ -76,7 +76,7 @@ On Windows use `python` or `py -3`. Put options before the photo list.
 The last output line is always `RESULT {...}`, one line of JSON. Parse it instead of the text above it.
 Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_ids`, `rejected` and
 `not_uploaded` (files not accepted, with reasons), `notices`, `task_errors`, `errors`, `parts_file`, `tasks_dir`,
-`total_quantity`, `distinct_parts`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
+`total_quantity`, `distinct_parts`, `inventory_url`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
 `passed`, `failed`, `error`; null when nothing was checked), `url`, `fails` and `warnings` (counts), `report_file`,
 `result_file`, `model_file`, `parts`, `steps`, `title`, `errors`; `moc guide` adds `guide_file`, `connectors_file`,
 `unsupported_parts`.
@@ -97,12 +97,18 @@ Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_
    when asked) edits `parts.json`. `lego.py parts` overwrites it, and so do `scan` / `status` when they collect
    new results or get `--images`; the previous copy is kept as `parts.json.bak`. If the user has hand-edited
    `parts.json`, warn them before running any of these, and offer to re-apply their edits afterwards. Photographing
-   the same parts twice counts them twice.
-6. **Photo advice.** Spread the parts out on a plain surface, not touching each other, and shoot from straight
+   the same parts twice counts them twice (the server only refuses the very same file, as `duplicate_photo`).
+6. **Show pictures, not just part numbers.** When you present the inventory, always give the user the link in
+   `inventory_url` (also printed as "Inventory page with pictures"): it is a web page of the whole inventory, each
+   part with its LDraw picture and the crop from the photo. If your chat can display images, also show the main
+   parts inline, using each row's `ldraw_image_url` and `crop_url` (or the local files after `--images`). A table
+   of bare LDraw numbers is not enough: most users cannot tell what `3020` is.
+7. **Photo advice.** Spread the parts out on a plain surface, not touching each other, and shoot from straight
    above in good light. Piled-up parts are recognised poorly. At most 30 photos per scan, 25 MB each; JPEG, PNG,
    WEBP or HEIC.
-7. **The user ID is the only credential.** Traffic is plain HTTP, and anyone with the ID in `user.json` can read
-   this inventory: don't share it or paste it anywhere public. Never delete or replace
+8. **The user ID is the only credential.** Anyone with the ID in `user.json` (it is also part of `inventory_url`)
+   can read this inventory and add scans to it: give the link to the user only, and don't paste the ID or the link
+   anywhere public. Traffic is HTTPS when the server address starts with `https://`. Never delete or replace
    `user.json`; the inventory and MOCs on the server belong to that ID. If a command says the server does not
    recognise the user ID, report it to the user; don't work around it.
 
@@ -173,10 +179,11 @@ Hard rules:
 ```json
 {
   "user_id": "k7m2x9qp", "updated_at": "2026-11-21T08:05:00Z", "pending_tasks": 0, "total_quantity": 57,
+  "inventory_url": "https://…/skill/u/k7m2x9qp",
   "items": [
     {"key": "3001|4", "ldraw_part": "3001", "ldraw_color": 4, "color_name": "Red", "color_hex": "#C91A09",
      "bricklink_id": "3001", "name": "Brick 2 x 4", "quantity": 3, "designable": true, "min_score": 0.74,
-     "low_confidence": false, "ldraw_image_url": "http://…/3001/4.png", "crop_url": "http://…/007.jpg",
+     "low_confidence": false, "ldraw_image_url": "https://…/3001/4.png", "crop_url": "https://…/007.jpg",
      "ref_image_url": "https://…", "piece_ids": ["t4h7…/007"],
      "local_ldraw_image": "/home/me/.lego-parts/images/ldraw/3001_4.png", "local_crop": "/home/me/…/t4h7…_007.jpg"}
   ],

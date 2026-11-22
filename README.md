@@ -42,6 +42,8 @@ python3 scripts/lego.py moc guide
 python3 scripts/lego.py moc submit model.ldr
 ```
 
+After a scan the script prints a link to a page that shows your inventory with pictures.
+
 `SKILL.md` has the full command list, exit codes and output format.
 
 ## Requirements
@@ -51,8 +53,9 @@ python3 scripts/lego.py moc submit model.ldr
 
 ## What leaves your computer
 
-- The script sends the photos you scan, and the model and parts list you submit, to the recognition server at `http://136.117.205.131`. The connection is plain HTTP, not encrypted.
+- The script sends the photos you scan, and the model and parts list you submit, to the recognition server at `https://136.117.205.131`. The connection is HTTPS, with a Let's Encrypt certificate issued for that IP address.
 - The server keeps the results under a random 8-character user ID, which the script stores in `~/.lego-parts/`. No account or API key is needed.
+- The inventory has a web page with pictures of every part, at a link that contains the user ID. Anyone who has that link or the ID can see the inventory, so do not post it publicly.
 - A model that passes gets a public link. Anyone who has the link can open it.
 - Do not scan photos that show anything you would not want to share.
 

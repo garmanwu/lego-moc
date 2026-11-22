@@ -30,8 +30,10 @@ import json
 import mimetypes
 import os
 import re
+import ssl
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import unicodedata
@@ -45,10 +47,11 @@ from pathlib import Path
 
 # Replaced with the server's public address when this file is downloaded from
 # {server}/skill/install/lego.py.  The placeholder must appear on this line only.
-DEFAULT_SERVER = "http://136.117.205.131"
+DEFAULT_SERVER = "https://136.117.205.131"
 PLACEHOLDER = "__LEGO_" + "SERVER__"  # split in two so the installer's replacement leaves it alone
 
-VERSION = "0.3"
+VERSION = "0.4"
+IMAGE_THREADS = 8
 API_PREFIX = "/skill/v1"
 MAX_PHOTOS = 30
 MAX_PHOTO_BYTES = 25 * 1024 * 1024
@@ -372,7 +375,11 @@ def resolve_server(user):
     if env:
         return normalize_server(env), "LEGO_PARTS_SERVER"
     if user and isinstance(user.get("server"), str) and user["server"].strip():
-        return normalize_server(user["server"]), "user.json"
+        stored, built_in = normalize_server(user["server"]), normalize_server(DEFAULT_SERVER)
+        if (built_in.startswith("https://") and stored.startswith("http://")
+                and stored[len("http://"):] == built_in[len("https://"):]):
+            return built_in, "built-in default (HTTPS; user.json still has the old http:// address)"
+        return stored, "user.json"
     return normalize_server(DEFAULT_SERVER), "built-in default"
 
 
@@ -436,6 +443,13 @@ def http_request(method, url, body=None, headers=None, timeout=TIMEOUT_S):
     except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
         reason = getattr(e, "reason", e)
         host = urllib.parse.urlparse(url).netloc
+        if isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(reason):
+            raise ApiError(None, "tls", (
+                "cannot verify the HTTPS certificate of {0}: {1}. Usually this Python has no root certificates "
+                "(on macOS with a python.org install, run \"Install Certificates.command\" from its "
+                "Applications folder), or a proxy on this computer intercepts HTTPS. Fix that and run the same "
+                "command again. Only if the user accepts sending the photos unencrypted, set "
+                "LEGO_PARTS_SERVER=http://{0}").format(host, reason))
         raise ApiError(None, "network", "cannot reach {}: {}".format(host, reason), refused=is_refused(reason))
 
 
@@ -827,6 +841,8 @@ def refresh_parts(ctx, rep, images):
         say("Previous parts.json kept as", path.with_name("parts.json.bak"))
     write_atomic(path, data)
     rep["parts_refreshed"] = True
+    if isinstance(data.get("inventory_url"), str):
+        say("Inventory page with pictures (give this link to the user):", data["inventory_url"])
     rep["server_pending"] = data.get("pending_tasks")
 
 
@@ -882,13 +898,35 @@ def fetch_image(ctx, rep, url, folder, name_for):
 
 
 def download_images(ctx, rep, items):
+    """Download both pictures of every row, IMAGE_THREADS at a time (an inventory can have over a thousand)."""
     root = ctx["home"] / "images"
+    jobs = []
     for row in items:
         if isinstance(row, dict):
-            row["local_ldraw_image"] = fetch_image(ctx, rep, row.get("ldraw_image_url"), root / "ldraw",
-                                                   lambda url, r=row: ldraw_image_name(r, url))
-            row["local_crop"] = fetch_image(ctx, rep, row.get("crop_url"), root / "crops",
-                                            lambda url, r=row: crop_image_name(r, url))
+            jobs.append((row, "local_ldraw_image", row.get("ldraw_image_url"), root / "ldraw", ldraw_image_name))
+            jobs.append((row, "local_crop", row.get("crop_url"), root / "crops", crop_image_name))
+    lock, position = threading.Lock(), [0]
+
+    def work():
+        while True:
+            with lock:
+                if position[0] >= len(jobs):
+                    return
+                row, field, url, folder, namer = jobs[position[0]]
+                position[0] += 1
+            local = {"images": {"downloaded": 0, "present": 0, "failed": []}}
+            path = fetch_image(ctx, local, url, folder, lambda u, r=row, f=namer: f(r, u))
+            with lock:
+                row[field] = path
+                for key in ("downloaded", "present"):
+                    rep["images"][key] += local["images"][key]
+                rep["images"]["failed"].extend(local["images"]["failed"])
+
+    threads = [threading.Thread(target=work, daemon=True) for _ in range(min(IMAGE_THREADS, len(jobs)))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
     info = rep["images"]
     say("Images: {} downloaded, {} already present, {} failed (in {})".format(
         info["downloaded"], info["present"], len(info["failed"]), root))
@@ -1015,6 +1053,14 @@ def emit_result(ctx, rep, code):
     print("RESULT " + json.dumps(obj, ensure_ascii=True, separators=(",", ":")), flush=True)
 
 
+def inventory_url(ctx):
+    try:
+        url = json.loads(parts_path(ctx).read_text(encoding="utf-8-sig")).get("inventory_url")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return url if isinstance(url, str) else None
+
+
 def scan_result(ctx, rep, code):
     done, failed, pending = classify(rep)
     rows, total, _ = load_inventory(ctx)
@@ -1029,7 +1075,7 @@ def scan_result(ctx, rep, code):
         "errors": rep["errors"],
         "parts_file": str(parts_path(ctx)), "parts_refreshed": rep["parts_refreshed"],
         "tasks_dir": str(tasks_dir(ctx)), "home": str(ctx["home"]),
-        "total_quantity": total, "distinct_parts": len(rows),
+        "total_quantity": total, "distinct_parts": len(rows), "inventory_url": inventory_url(ctx),
     }
 
 
