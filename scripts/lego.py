@@ -52,7 +52,7 @@ from pathlib import Path
 DEFAULT_SERVER = "https://136.117.205.131"
 PLACEHOLDER = "__LEGO_" + "SERVER__"  # split in two so the installer's replacement leaves it alone
 
-VERSION = "0.5"
+VERSION = "0.6"
 IMAGE_THREADS = 8
 API_PREFIX = "/skill/v1"
 MAX_PHOTOS = 30
@@ -845,6 +845,14 @@ def refresh_parts(ctx, rep, images):
     rep["parts_refreshed"] = True
     if isinstance(data.get("inventory_url"), str):
         say("Inventory page with pictures (give this link to the user):", data["inventory_url"])
+    sheet = path.with_name("inventory.png")
+    try:                                   # one overview picture of the inventory, for chats that can show a local image
+        _status, raw = api_raw(ctx, "GET", "/parts/sheet.png", timeout=UPLOAD_TIMEOUT_S, accept="image/png")
+        if raw[:8] == b"\x89PNG\r\n\x1a\n":
+            write_atomic(sheet, raw)
+            say("Inventory overview picture (show this image to the user):", sheet)
+    except (ApiError, OSError):
+        pass                               # an older server or a failed download: the page link still works
     rep["server_pending"] = data.get("pending_tasks")
 
 
@@ -1104,6 +1112,7 @@ def scan_result(ctx, rep, code):
         "parts_file": str(parts_path(ctx)), "parts_refreshed": rep["parts_refreshed"],
         "tasks_dir": str(tasks_dir(ctx)), "home": str(ctx["home"]),
         "total_quantity": total, "distinct_parts": len(rows), "inventory_url": inventory_url(ctx),
+        "inventory_image": str(parts_path(ctx).with_name("inventory.png")) if parts_path(ctx).with_name("inventory.png").is_file() else None,
     }
 
 

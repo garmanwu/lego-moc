@@ -1,7 +1,7 @@
 ---
 name: lego-moc
 description: Recognise loose LEGO parts from 1-30 photos into an inventory (~/.lego-parts/parts.json, shared by all agents), then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public link with a 3D preview and step-by-step building instructions. Use when the user wants to identify, scan or count LEGO pieces from photos, build or update a parts inventory, design or build a MOC from parts they own, check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 1.1.1
+version: 1.2.0
 metadata:
   openclaw:
     emoji: "🧱"
@@ -37,6 +37,18 @@ python3 <this skill folder>/scripts/lego.py <command> [options] [arguments]
 ```
 
 On Windows use `python` or `py -3`. Put options before the photo list.
+
+**Keep the user's approvals few.** Many agents ask the user to approve each new shell command, each network
+host and each write outside the workspace. So:
+- Always call the script in exactly this form, as one plain command: no `cd`, no pipes, no `&&`, no environment
+  prefix, no wrapper script. Then the user can approve "always allow" once for `python3 <path>/lego.py` and is not
+  asked again. Tell the user this the first time an approval appears.
+- The script needs three things, all of which the user can allow once: run `lego.py`, reach the server host shown by
+  `lego.py whoami`, and read/write `~/.lego-parts/`.
+- Don't run the same step twice, don't poll in a loop of short commands (use `--wait`), and don't call the server
+  with curl or code of your own.
+- When you design a model, write `model.ldr` (and any helper you need) with your file-writing tool in as few steps
+  as you can. Avoid a long series of throw-away scripts: each one is another approval for the user.
 
 | Command | What it does |
 |---|---|
@@ -76,7 +88,7 @@ On Windows use `python` or `py -3`. Put options before the photo list.
 The last output line is always `RESULT {...}`, one line of JSON. Parse it instead of the text above it.
 Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_ids`, `rejected` and
 `not_uploaded` (files not accepted, with reasons), `notices`, `task_errors`, `errors`, `parts_file`, `tasks_dir`,
-`total_quantity`, `distinct_parts`, `inventory_url`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
+`total_quantity`, `distinct_parts`, `inventory_url`, `inventory_image`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
 `passed`, `failed`, `error`; null when nothing was checked), `url`, `fails` and `warnings` (counts), `report_file`,
 `result_file`, `model_file`, `parts`, `steps`, `title`, `errors`; `moc guide` adds `guide_file`, `connectors_file`,
 `unsupported_parts`.
@@ -98,11 +110,14 @@ Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_
    new results or get `--images`; the previous copy is kept as `parts.json.bak`. If the user has hand-edited
    `parts.json`, warn them before running any of these, and offer to re-apply their edits afterwards. Photographing
    the same parts twice counts them twice (the server only refuses the very same file, as `duplicate_photo`).
-6. **Show pictures, not just part numbers.** When you present the inventory, always give the user the link in
-   `inventory_url` (also printed as "Inventory page with pictures"): it is a web page of the whole inventory, each
-   part with its LDraw picture and the crop from the photo. If your chat can display images, also show the main
-   parts inline, using each row's `ldraw_image_url` and `crop_url` (or the local files after `--images`). A table
-   of bare LDraw numbers is not enough: most users cannot tell what `3020` is.
+6. **Show pictures, not just part numbers.** A table of bare LDraw numbers is not enough: most users cannot tell
+   what `3020` is. When you present the inventory, do all that your environment allows:
+   - Show the picture `inventory_image` (`~/.lego-parts/inventory.png`, refreshed with `parts.json`): one image
+     with the main parts, each with its picture, quantity, number, name and colour (an orange frame and `?` mark
+     low-confidence rows). Display it the way you display any local image file.
+   - Always give the user the link `inventory_url`: a web page of the whole inventory, each part with its LDraw
+     picture and the crop from the photo. If you have a browser or preview panel, open the link there for the user.
+   - If your chat renders remote images, you may also show single parts with `ldraw_image_url` / `crop_url`.
 7. **Photo advice.** Spread the parts out on a plain surface, not touching each other, and shoot from straight
    above in good light. Piled-up parts are recognised poorly. At most 30 photos per scan, 25 MB each; JPEG, PNG,
    WEBP or HEIC.
@@ -168,6 +183,7 @@ Hard rules:
 | `tasks/<task_id>.json` | One photo: `status`, `notice`, `error`, `pieces_found`, `pieces_accepted`, `pieces[]` (each with `score`, `accepted`, `low_confidence`, `key`, `ldraw_part`, `ldraw_color`, `name`, `designable`, `crop_url`, `ldraw_image_url`, `bbox`, `candidates`) |
 | `parts.json` | The inventory, see below |
 | `parts.json.bak` | The previous `parts.json` |
+| `inventory.png` | One overview picture of the inventory, refreshed with `parts.json` |
 | `images/ldraw/<part>_<colour>.png`, `images/crops/<task>_<nnn>.jpg` | Downloaded with `--images` |
 | `moc/DESIGN_GUIDE.md`, `moc/connectors.txt` | Written by `moc guide` |
 | `moc/pending.json` | `{"moc_ids": [...]}`: submitted, check result not collected yet |
@@ -191,7 +207,8 @@ Hard rules:
 }
 ```
 
-Only pieces scoring at least 0.50 are counted. Rows come designable first, then by quantity. `key` is
+Only pieces the server is fairly sure of are counted: score at least 0.60 and a clean cut-out; in a photo flagged
+`pile_photo` at least 0.80, so such a photo adds few parts (the rest are in `tasks/<task_id>.json` with `accepted: false`). Rows come designable first, then by quantity. `key` is
 `<ldraw_part>|<ldraw_color>`; a half that could not be converted reads `bl:<BrickLink id>`, and then the
 matching `ldraw_*` field is null. `local_*` fields exist only after `--images` and are null when a download failed;
 they are not sent with a MOC.
