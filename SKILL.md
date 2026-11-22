@@ -1,7 +1,7 @@
 ---
 name: lego-moc
-description: Recognise loose LEGO parts from 1-30 photos into an inventory (~/.lego-parts/parts.json, shared by all agents), then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public link with a 3D preview and step-by-step building instructions. Use when the user wants to identify, scan or count LEGO pieces from photos, build or update a parts inventory, design or build a MOC from parts they own, check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 1.2.0
+description: Recognise loose LEGO parts from photos into a parts inventory, then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public page with a 3D preview and step-by-step building instructions. Works through MCP tools (scan_photos, inventory, submit_model and others) or a fallback Python script. Use when the user wants to identify, scan or count LEGO pieces from photos, build, show or correct a parts inventory, design or build a MOC from parts they own (a car, a house, a description, a picture), check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
+version: 2.0.0
 metadata:
   openclaw:
     emoji: "🧱"
@@ -19,18 +19,150 @@ metadata:
         description: Optional. Local data folder, default ~/.lego-parts.
 ---
 
-# LEGO parts recognition and MOC check
+# LEGO parts recognition and MOC design
 
-Two stages, one script, one local folder shared by every agent (`~/.lego-parts/`):
+Two stages:
 
-1. **Scan.** Upload photos of loose parts; the server recognises them and the script saves the inventory `parts.json`.
-2. **Design and verify.** You design a model (MOC) from that inventory yourself and write it as an LDraw file. The
-   server checks it physically: on failure it returns fix notes naming the offending lines; on pass, a public link
-   with a 3D view and step-by-step building instructions. The server designs nothing; the design is yours.
+1. **Scan.** The user photographs loose parts; the server recognises them and keeps the inventory (per user ID).
+2. **Design and verify.** You design a model (MOC) from that inventory and write it as an LDraw file. The server
+   checks it physically: on failure it names the offending lines; on a pass it publishes a page with a 3D view and
+   step-by-step building instructions. The server designs nothing: the design is yours.
 
-## Run
+There are two ways to work. **MCP tools** (section 2) need no shell commands; use them whenever they are available.
+**The script** `scripts/lego.py` (section 5) does the same through shell commands and is the fallback.
 
-The script is `scripts/lego.py` inside this skill's folder. Python 3.8+, standard library only, nothing to install.
+## 1. Are the MCP tools available?
+
+Look in your tool list for these names, usually shown under a server prefix such as `lego-moc` (for example
+`mcp__lego-moc__scan_photos` or `lego-moc.scan_photos`):
+
+`scan_photos`, `scan_status`, `inventory`, `edit_inventory`, `design_guide`, `connectors`, `submit_model`,
+`moc_status`
+
+- **All present:** work as in section 2.
+- **All but `scan_photos`:** the host uses the remote server endpoint, which cannot read files on this computer.
+  Upload photos with the script (`scan`), do everything else with the tools.
+- **None present:** use the script (section 5) for this task; everything works with it. Then offer the user the
+  one-time setup below, which removes the per-command approvals.
+
+### One-time setup (the user does it)
+
+1. Run `python3 <this skill folder>/scripts/lego.py mcp-config` (Windows: `python`). It prints a JSON block and
+   makes no network call.
+2. Give the user that JSON and ask them to add the `lego-moc` entry to the `mcpServers` section of the agent's MCP
+   settings (settings page or MCP config file), then restart the agent or reload its MCP servers. Edit the host's
+   configuration yourself only if the user asks you to.
+3. After the restart the agent starts the bridge itself (`lego.py mcp`, a local stdio MCP server) and the tools
+   appear. The same `~/.lego-parts/` folder and user ID are used, so nothing scanned so far is lost.
+
+`lego.py mcp-config --remote` prints the server's own endpoint instead (`type: http`, a URL that contains the user
+ID; it creates an ID if none exists). Use it only for hosts that cannot run local commands. It has no
+`scan_photos`, and its URL is a credential: never post it anywhere public.
+
+## 2. MCP flow
+
+Every tool result has a text part for you to read and a `structuredContent` object with the fields. An error comes
+back as a result with `isError: true` whose text says what happened and what to do next. Do it; don't work around
+it with your own HTTP calls.
+
+### Scan
+
+1. **`scan_photos`** `{"paths": [...]}`: absolute paths of photo files, folders or glob patterns on this computer,
+   1–30 photos per call (JPEG, PNG, WEBP, HEIC, 25 MB each). It returns at once with one task per photo; it does not
+   wait for recognition. Tell the user every entry of `rejected` and `not_uploaded` with its reason. A
+   `duplicate_photo` entry means that exact file was uploaded before: it is not recognised again, and `previous`
+   is the first upload's result (its parts are in the inventory already). If the host times the call out, the
+   upload goes on: call `scan_status` instead of uploading again. With many large photos, use several calls of
+   about 8 photos.
+2. **`scan_status`** `{"wait_s": 50}`: repeat until `pending` is 0 (recognition takes minutes; the first photo can
+   wait for the GPU to start). Relay every entry of `notices` (`pile_photo`, `no_pieces`) to the user verbatim and
+   name the failed photos with their `error`. If it stays pending for a long time, tell the user how many photos
+   are still being processed instead of looping forever.
+
+### Show and correct the inventory
+
+3. **`inventory`**: shows the inventory with an overview picture (an image in the result) and `inventory_url`.
+   Show the user the picture and give them the link; if you have a browser or preview panel, open the link there.
+   Never present a table of bare part numbers: most users cannot tell what `3020` is. Point out the low-confidence
+   rows (orange frame and `?` in the picture) and ask the user to check them on the page. `designable: false` rows
+   have no usable 3D geometry and can never be built with. `pending_tasks > 0` means the inventory is incomplete:
+   say so. Use `filter: "usable"` or `"low_confidence"` and `offset`/`limit` for long inventories.
+4. **`edit_inventory`** `{"changes": [...]}`, only on the user's word (never to make a design fit):
+   `{"op": "set_quantity", "key": "3001|4", "quantity": 3}`, `{"op": "remove", "key": ...}`,
+   `{"op": "confirm", "key": ...}` (the user checked a low-confidence row and it is right),
+   `{"op": "replace", "key": ..., "ldraw_part": "3002", "ldraw_color": 4}` (it is really another part or colour),
+   `{"op": "add", "ldraw_part": "3003", "ldraw_color": 14, "quantity": 2}`, `{"op": "undo", "key": ...}`,
+   `{"op": "undo_all"}`. Each change reports `ok`; tell the user which did not apply and why. The user can make the
+   same edits on the inventory page.
+
+### Design
+
+5. **Understand the request** (section 3): subject, description, reference picture or nothing; check that the
+   inventory can carry it before you design.
+6. **`design_guide`**: read the whole guide before your first design in a conversation. It is the server's current
+   rule book: file format, coordinates, which connectors mate, the verifier's rules, worked examples and how to use
+   many parts. It also returns `usable_quantity` and `target_percent`.
+7. **`connectors`** `{"parts": ["3001", "3023", ...]}` (1–40 LDraw part numbers per call): the bounds and every
+   connector of each part you plan to use. Take every part's origin and connector positions from here; never guess
+   them. A part reported as `unsupported` cannot be used.
+8. Write the model: a `0 <title>` line, then one line `1 <colour> x y z a b c d e f g h i <part>.dat` per part, with
+   `<colour>` = `ldraw_color` and `<part>` = `ldraw_part` from the inventory. Only usable rows, and per `key` at most
+   its `quantity` across the whole model; count before you submit. No sub-models, no `0 STEP` lines.
+
+### Verify and improve
+
+9. **`submit_model`** `{"ldr": "<the whole file>", "title": "...", "brief": "<the user's request, their words>"}`;
+   add `"moc_id"` to submit a new version of the same model, and `"design"` only for declared moving parts (see the
+   guide). It waits up to `wait_s` (default 45) and returns `status`, the `issues` (each fail names the rule, a hint,
+   and the parts with their file line and position), `usage`, `resubmissions_left` and, on a pass, `url` and two
+   preview pictures. If `status` is not final yet (`queued`, `checking`, `stepping`), call **`moc_status`**
+   `{"moc_id": ..., "wait_s": 50}`. Status `error` is a server-side failure, not a design problem: submit the same
+   model again with its `moc_id`.
+10. **Failed:** fix exactly the named lines (recompute positions from `connectors`, don't nudge numbers) and submit
+    again with the `moc_id`.
+11. **Passed:** look at both previews and at `usage`, then decide whether another round is worth it (section 4).
+    The public page always shows the latest version that passed, so a failed later round does not take it down.
+12. **Report:** give the user the page `url` (say that it is public), the part and step counts, every warning, what
+    you built and what you could not do. Passing means the model is physically consistent in the verifier's
+    simulation, not that the real build is guaranteed to hold: say so.
+
+## 3. Design requests
+
+The user may give a subject ("a car"), a detailed description, a reference picture, or nothing at all.
+
+- **Check feasibility first.** Look at the inventory (shapes, colours, quantities) before promising anything. A car
+  needs wheels and axles or something that can stand in for them; a house needs enough bricks for walls and parts
+  for a roof. Tell the user plainly what can and cannot be met, and propose alternatives that the parts do allow
+  (a smaller version, another subject, a stylised one) instead of forcing it.
+- **Description:** keep the features the user named; say which ones you had to drop or change and why.
+- **Reference picture** (only if you can see images): build a model in its spirit (its shape, proportions and main
+  colours) from the parts the user owns. It will not be a replica; say so.
+- **Nothing given:** pick a subject that suits the inventory (its main colours and the shapes it has most of) and
+  say what you chose.
+- Pass the user's request text, in their words, as `brief`. Put the subject in the title.
+- **Thin inventory.** If there are fewer than about 60 usable pieces, or the inventory is mostly single pieces in
+  many colours, tell the user before designing: only a small or abstract model is possible. Suggest confirming
+  low-confidence rows (after checking them on the inventory page) and photographing more parts spread out. A new
+  photo of parts that were already counted counts them again: suggest photographing parts not scanned yet, or
+  correcting the quantities afterwards with `set_quantity`.
+
+## 4. Use many parts, then refine
+
+- **Target:** use at least 60% of the usable pieces (`usage.target_percent`) unless the user asked for something
+  small. Usable = designable and not low-confidence, or confirmed. `usage.percent` in every submission result shows
+  where you are, and `usage.unused` lists what is left, most plentiful first.
+- **Stage the work.** Version 1: the main structure (base, body, the big shapes). Later versions add detail in
+  large steps: roof finishing, windows and doors, railings, decoration, a base plate or ground. Only 5 resubmissions
+  exist per model, so each round must add a lot; don't spend one on a single part.
+- **Every result:** read `usage` and `unused` and ask which unused parts would make the subject better. On a pass,
+  look at both previews and fix what looks wrong: a random mix of colours, bare studs on top, a lopsided shape where
+  the subject is symmetric, a flat box. The guide's advice section says how.
+- Stop when the model is good and the target is met, when the inventory cannot add anything sensible, or when the
+  resubmissions are used up. Tell the user the final usage.
+
+## 5. Script fallback
+
+Use the script when the MCP tools are not available. Python 3.8+, standard library only, nothing to install.
 
 ```
 python3 <this skill folder>/scripts/lego.py <command> [options] [arguments]
@@ -38,44 +170,43 @@ python3 <this skill folder>/scripts/lego.py <command> [options] [arguments]
 
 On Windows use `python` or `py -3`. Put options before the photo list.
 
-**Keep the user's approvals few.** Many agents ask the user to approve each new shell command, each network
-host and each write outside the workspace. So:
+**Keep the user's approvals few.** Many agents ask the user to approve each new shell command, network host and
+write outside the workspace. So:
 - Always call the script in exactly this form, as one plain command: no `cd`, no pipes, no `&&`, no environment
-  prefix, no wrapper script. Then the user can approve "always allow" once for `python3 <path>/lego.py` and is not
-  asked again. Tell the user this the first time an approval appears.
+  prefix, no wrapper script. Then the user can approve "always allow" once for `python3 <path>/lego.py`. Tell the
+  user this the first time an approval appears, and mention the MCP setup (section 1), which avoids them.
 - The script needs three things, all of which the user can allow once: run `lego.py`, reach the server host shown by
   `lego.py whoami`, and read/write `~/.lego-parts/`.
 - Don't run the same step twice, don't poll in a loop of short commands (use `--wait`), and don't call the server
   with curl or code of your own.
-- When you design a model, write `model.ldr` (and any helper you need) with your file-writing tool in as few steps
-  as you can. Avoid a long series of throw-away scripts: each one is another approval for the user.
+- Write `model.ldr` with your file-writing tool in as few steps as you can; avoid a series of throw-away scripts.
 
 | Command | What it does |
 |---|---|
 | `scan [--no-wait] [--wait SECONDS] [--images] PHOTO...` | Uploads 1–30 photos (files, folders or glob patterns), waits up to 480 s (default) for the results and saves them. `--no-wait` returns right after uploading. |
 | `status [--wait SECONDS] [--images] [TASK_ID...]` | Checks the pending tasks (or the given ones) once, or keeps polling up to SECONDS. Saves finished ones. |
-| `parts [--images]` | Saves finished pending tasks, then reloads the whole inventory from the server into `parts.json`. |
+| `parts [--images]` | Saves finished pending tasks, then reloads the whole inventory (with the edits made on the inventory page or with `edit_inventory`) into `parts.json`. |
 | `whoami` | Shows the user ID, server and local folder. No network. |
 | `moc guide [--parts-file PATH]` | Saves the design guide `moc/DESIGN_GUIDE.md` and the connector sheets of your parts `moc/connectors.txt`. |
-| `moc submit [--title NAME] [--design design.json] [--moc MOC_ID] [--parts-file PATH] [--no-wait] [--wait SECONDS] MODEL.ldr` | Sends the model with `parts.json`, waits up to 300 s (default) for the check and prints the result. `--moc` submits a new version of an existing MOC. |
+| `moc submit [--title NAME] [--brief TEXT] [--design design.json] [--moc MOC_ID] [--parts-file PATH] [--no-wait] [--wait SECONDS] MODEL.ldr` | Sends the model with `parts.json`, waits up to 300 s (default) for the check and prints the result, the parts usage and, on a pass, the preview links. `--moc` submits a new version of an existing MOC; `--brief` is the user's request. |
 | `moc status [--wait SECONDS] [MOC_ID]` | Checks the pending MOC submissions (or the given one) once, or keeps polling up to SECONDS. |
+| `mcp-config [--remote]` | Prints the JSON for the MCP setup (section 1). Output is only that JSON; no RESULT line. |
+| `mcp` | The MCP bridge itself. The agent host runs it; don't run it yourself. |
 
 `--images` also downloads each inventory row's LDraw picture and photo crop into `images/`.
 
-- **Long waits.** `scan` can run for 8 minutes, `moc submit` for 5. If your shell tool times out sooner (some
-  default to 2 minutes), raise its timeout or pass a smaller `--wait` (e.g. `--wait 100`) and continue with
-  `status --wait 100` / `moc status --wait 100`. Being stopped mid-wait is safe: IDs are saved in `pending.json` /
-  `moc/pending.json` first, and any later command, from any agent, collects them.
-- **Server address.** Normally built into the downloaded script. If a command says no server is configured,
-  the user must set `LEGO_PARTS_SERVER` (e.g. `https://203.0.113.7`, without `/skill/v1`).
-  `LEGO_PARTS_HOME` changes the local folder.
+- **Long waits.** `scan` can run for 8 minutes, `moc submit` for 5. If your shell tool times out sooner, raise its
+  timeout or pass a smaller `--wait` (e.g. `--wait 100`) and continue with `status --wait 100` /
+  `moc status --wait 100`. Being stopped mid-wait is safe: IDs are saved in `pending.json` / `moc/pending.json`
+  first, and any later command, from any agent, collects them.
+- **Server address.** Built into the downloaded script. If a command says no server is configured, the user must set
+  `LEGO_PARTS_SERVER` (e.g. `https://lego.groundrl.com`, without `/skill/v1`). `LEGO_PARTS_HOME` changes the local
+  folder.
+- **Blocked network.** If a command reports `HTTP 403 ... not from the LEGO server` or cannot reach the server, a
+  sandbox, proxy or firewall is blocking it. Ask the user to allow network access to the server's host, then run the
+  same command again. New IDs are limited to 5 per network per day, and results are only saved when the script runs.
 
-- **Blocked network.** If a command reports `HTTP 403 ... not from the LEGO server` or cannot reach the server,
-  your sandbox, proxy or firewall is blocking it. Ask the user to allow network access to the server's host, then
-  run the same command again. Do not call the API by hand with curl to work around it: new IDs are limited to
-  5 per network per day, and results are only saved when the script itself runs.
-
-## Exit codes and output
+### Exit codes and RESULT
 
 | Exit | Meaning |
 |---|---|
@@ -85,130 +216,97 @@ host and each write outside the workspace. So:
 | 1 | Error: read the `ERROR:` lines. For a MOC this includes status `error` (a server-side failure) |
 | 2 | Usage error: bad arguments, more than 30 photos, a missing or unusable file named on the command line |
 
-The last output line is always `RESULT {...}`, one line of JSON. Parse it instead of the text above it.
-Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_ids`, `rejected` and
-`not_uploaded` (files not accepted, with reasons), `notices`, `task_errors`, `errors`, `parts_file`, `tasks_dir`,
-`total_quantity`, `distinct_parts`, `inventory_url`, `inventory_image`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
+The last output line is always `RESULT {...}`, one line of JSON (except `mcp` and `mcp-config`). Parse it instead
+of the text above it. Scan fields: `exit_code`, `user_id`, `done`, `failed`, `pending`, `pending_task_ids`,
+`rejected` and `not_uploaded` (files not accepted, with reasons; `duplicate_photo` entries carry `task_id` and
+`previous`), `notices`, `task_errors`, `errors`, `parts_file`, `tasks_dir`, `total_quantity`, `distinct_parts`,
+`inventory_url`, `inventory_image`. MOC fields: `moc_id`, `version`, `status` (`queued`, `checking`, `stepping`,
 `passed`, `failed`, `error`; null when nothing was checked), `url`, `fails` and `warnings` (counts), `report_file`,
-`result_file`, `model_file`, `parts`, `steps`, `title`, `errors`; `moc guide` adds `guide_file`, `connectors_file`,
-`unsupported_parts`.
+`result_file`, `model_file`, `parts`, `steps`, `title`, `usage` (`used`, `usable`, `percent`, `target_percent`),
+`previews`, `errors`; `moc guide` adds `guide_file`, `connectors_file`, `unsupported_parts`.
 
-## Rules for scanning
+### Scanning with the script
 
-1. **Exit code 3 means tasks are still running.** Run `lego.py status --wait 300` again until it exits 0 before
-   you read `parts.json`. Do the same whenever `RESULT` has `pending > 0`, whatever the exit code. If it keeps
-   returning 3 for a long time, tell the user how many photos are still being processed instead of looping forever.
-2. **Incomplete inventory.** If `parts.json` has `local_pending_tasks > 0` or `pending_tasks > 0`, the inventory
-   is incomplete. Say so if you use it.
-3. **Relay every notice.** Pass each entry of `notices` (e.g. `pile_photo`, `no_pieces`) to the user verbatim,
-   in the user's language: translate the full message faithfully, don't drop or soften it. Also name the
-   failed photos (`task_errors`) and the files in `rejected` / `not_uploaded`, with their reasons.
-4. **Uncertain parts.** `low_confidence: true` means the part may be misidentified: point it out (the crop image
-   helps the user check). `designable: false` means there is no usable LDraw geometry: don't build with it.
-5. **Edits are local.** The server has no delete or edit API. To correct a part or a quantity, the user (or you,
-   when asked) edits `parts.json`. `lego.py parts` overwrites it, and so do `scan` / `status` when they collect
-   new results or get `--images`; the previous copy is kept as `parts.json.bak`. If the user has hand-edited
-   `parts.json`, warn them before running any of these, and offer to re-apply their edits afterwards. Photographing
-   the same parts twice counts them twice (the server only refuses the very same file, as `duplicate_photo`).
-6. **Show pictures, not just part numbers.** A table of bare LDraw numbers is not enough: most users cannot tell
-   what `3020` is. When you present the inventory, do all that your environment allows:
-   - Show the picture `inventory_image` (`~/.lego-parts/inventory.png`, refreshed with `parts.json`): one image
-     with the main parts, each with its picture, quantity, number, name and colour (an orange frame and `?` mark
-     low-confidence rows). Display it the way you display any local image file.
-   - Always give the user the link `inventory_url`: a web page of the whole inventory, each part with its LDraw
-     picture and the crop from the photo. If you have a browser or preview panel, open the link there for the user.
-   - If your chat renders remote images, you may also show single parts with `ldraw_image_url` / `crop_url`.
-7. **Photo advice.** Spread the parts out on a plain surface, not touching each other, and shoot from straight
-   above in good light. Piled-up parts are recognised poorly. At most 30 photos per scan, 25 MB each; JPEG, PNG,
-   WEBP or HEIC.
-8. **The user ID is the only credential.** Anyone with the ID in `user.json` (it is also part of `inventory_url`)
-   can read this inventory and add scans to it: give the link to the user only, and don't paste the ID or the link
-   anywhere public. Traffic is HTTPS when the server address starts with `https://`. Never delete or replace
-   `user.json`; the inventory and MOCs on the server belong to that ID. If a command says the server does not
-   recognise the user ID, report it to the user; don't work around it.
+1. **Exit 3** means tasks are still running: run `lego.py status --wait 300` until it exits 0 before you read
+   `parts.json`; the same whenever `RESULT` has `pending > 0`.
+2. If `parts.json` has `local_pending_tasks > 0` or `pending_tasks > 0`, the inventory is incomplete: say so.
+3. Relay `notices`, `task_errors`, `rejected` and `not_uploaded` as section 6 says.
+4. **Show pictures:** show `inventory_image` (`~/.lego-parts/inventory.png`, refreshed with `parts.json`) the way
+   you show any local image, and always give the link `inventory_url`.
+5. **Corrections** belong on the server: the user makes them on the inventory page (or you, on their word, with
+   `edit_inventory`), then `lego.py parts` brings them into `parts.json`. A hand edit of `parts.json` affects only
+   what `moc submit` sends and is overwritten by `parts`, and by `scan` / `status` when they collect new results
+   (the previous copy is kept as `parts.json.bak`); warn the user before running those.
 
-## Design and verify a MOC
+### Designing with the script
 
-Notes before you start:
-- `moc submit` needs a user ID. If `user.json` does not exist yet it requests a new one and saves it; tell the user
-  when that happens. `moc guide` needs no ID.
-- A `parts.json` the user supplies by hand may contain only `items` (each with `ldraw_part`, `ldraw_color`, `quantity`,
-  and optionally `designable`, `low_confidence`, `name`). Treat missing `designable` as true and missing
-  `low_confidence` as false; the pending-task checks apply only to inventories written by this script.
-- The verifier checks physics only. It never judges whether the model looks like what the user asked for: say honestly
-  what you built and, if you could not view the page, that you have not seen the result.
-- A check usually takes well under a minute.
+1. `lego.py moc guide` (needs `parts.json`: scan first; run it again after the inventory changes), then read
+   `moc/DESIGN_GUIDE.md` in full and take every origin and connector position from `moc/connectors.txt`.
+2. Write `model.ldr` as in step 8 of section 2, using `parts.json`. A `parts.json` the user supplies by hand may
+   contain only `items` (`ldraw_part`, `ldraw_color`, `quantity`, optionally `designable`, `low_confidence`): treat
+   missing `designable` as true and missing `low_confidence` as false.
+3. `lego.py moc submit model.ldr --title "..." --brief "..."` (add `--design design.json` only for declared moving
+   parts). Pass the same `--parts-file` to `guide` and `submit` if you don't use the default `parts.json`.
+   `moc submit` needs a user ID and creates one if `user.json` does not exist yet: tell the user when it does.
+4. **Exit 4:** each `FAIL` block gives the rule, the reason, a hint and the parts as
+   `line <n>: <part> colour <c> at (x, y, z)`; line numbers count every line of the submitted file from 1 (copy in
+   `moc/<moc_id>/v<N>.ldr`, all parts in `report_file`). Fix those lines and submit a new version:
+   `lego.py moc submit model.ldr --moc <moc_id>`.
+5. **Exit 0:** passed. Read the `Parts used` line and the preview links, then refine as section 4 says, with
+   `--moc <moc_id>`. **Exit 3:** `lego.py moc status <moc_id> --wait 300`. **Exit 1** with `status: "error"`: a
+   server-side failure; submit the same file again with `--moc`. Any other exit 1: report the `ERROR:` line (e.g.
+   the daily submission limit, a full queue).
 
-1. `lego.py moc guide` (needs `parts.json`: scan first). Run it again after the inventory changes.
-2. Read `moc/DESIGN_GUIDE.md` in full: it is the server's current rule book (file format, coordinates, which
-   connectors mate, the verifier's rules, worked examples). Take every part's origin and connector positions from
-   `moc/connectors.txt`; never guess them.
-3. Write `model.ldr`: a `0 <title>` line, then one `1 <colour> x y z a b c d e f g h i <part>.dat` line per part,
-   `<colour>` = `ldraw_color` and `<part>` = `ldraw_part` from `parts.json`. Use only rows with `designable: true`,
-   never a part that `connectors.txt` calls "not a supported part", and per `key` (part + colour) at most
-   `quantity` across the whole model; if the user edited `parts.json`, their numbers count. Don't rely on
-   `low_confidence` rows for structure unless the user confirms them. Count the parts per `key` before submitting.
-   No sub-models and no `0 STEP` lines: the server works out the building steps itself.
-4. `lego.py moc submit model.ldr` (add `--title`; for parts meant to move, a `design.json` as the guide describes,
-   with `--design`; otherwise build a static model). Pass the same `--parts-file` to `guide` and `submit` if you
-   don't use the default `parts.json`.
-5. **Exit 4:** each `FAIL` block gives the rule, the reason, a hint and the parts involved as
-   `line <n>: <part> colour <c> at (x, y, z)`. Line numbers count every line of the submitted file from 1 (a copy
-   is in `moc/<moc_id>/v<N>.ldr`; all parts are in `report_file`). Fix those lines and submit a new version of the
-   same MOC: `lego.py moc submit model.ldr --moc <moc_id>`.
-6. **Exit 0:** give the user the `url`, the part and step counts, and every warning.
-7. **Exit 3:** `lego.py moc status <moc_id> --wait 300`. **Exit 1** with `status: "error"`: a server-side failure,
-   not a design problem; submit the same file again with `--moc`. Any other exit 1: report the `ERROR:` line
-   (e.g. the daily submission limit, a full queue).
+## 6. Rules
 
-Hard rules:
+- **Relay every notice verbatim**, in the user's language: translate the full message faithfully; don't drop or
+  soften it. The same for failed photos, rejected and not uploaded files (with reasons) and every verifier warning.
+- **Pictures, not part numbers.** When you present the inventory, show the overview picture and give
+  `inventory_url`.
+- **Low-confidence rows** may be misidentified: build with them only after the user confirmed them (MCP:
+  `edit_inventory` `confirm`; the user can also confirm on the inventory page). Never use `designable: false` rows.
+- **Edits only on the user's word.**
+- **Never claim a model is buildable, valid or verified unless its status is `passed`.** A status call that checked
+  nothing (`status: null`) proves nothing.
+- **The model page link is public:** anyone with the URL can view it. Tell the user when you give it.
+- **Passing is not a real-world guarantee**: it means physically consistent in the verifier's simulation.
+- **At most 5 resubmissions per model.** If it still fails, stop and tell the user honestly which rules still fail
+  and on which parts.
+- **The user ID is a credential.** Anyone with it, or with a link that contains it (`inventory_url`, the works page,
+  the `--remote` MCP URL), can read the inventory and add to it. Give those to the user only; never post them
+  anywhere public. Never delete or replace `~/.lego-parts/user.json`: the inventory and models belong to that ID. If
+  the server does not recognise the ID, tell the user; don't create a new one.
+- **Duplicate photos** are refused and not recognised again (`duplicate_photo`). Re-photographing parts that were
+  already scanned counts them twice.
+- **Photo advice:** parts spread out on a plain surface, not touching, shot from straight above in good light; piled
+  parts are recognised poorly (`pile_photo`).
+- **Be honest about the design.** The verifier checks physics only, never whether the model looks like its subject.
+  Say what you built; if you could not see the previews, say that you have not seen the result.
+- **No verification, no claim.** If neither the tools nor the script can reach the server, you may still write an
+  `.ldr` from the guide, but tell the user plainly that it was not verified and has no building instructions.
 
-- **At most 5 resubmissions** of one model. If it still fails, stop and tell the user honestly which rules still
-  fail and on which parts; don't keep retrying.
-- **Never claim a model is buildable, valid or verified unless the server said `passed`** (RESULT `status` is
-  `"passed"`). A `moc status` exit 0 with `status: null` checked nothing.
-- **Relay every warning.** Warnings don't fail the model, but the user should hear them.
-- **The link is public:** anyone who has the URL can view the model. Tell the user so when you give it.
-- **Passing is not a guarantee.** It means the model is physically consistent in the verifier's simulation, not
-  that the real build will hold. Say so.
-- **Without the script or the server** (you cannot run commands or reach it), you may still write an `.ldr` from the
-  guide, but tell the user plainly that it was not verified and has no building instructions.
+## 7. Files in `~/.lego-parts/`
 
-## Files in `~/.lego-parts/`
+Shared by the MCP bridge and the script. With MCP, the inventory and results live on the server; the bridge only
+writes `user.json` and `pending.json`.
 
 | File | Content |
 |---|---|
-| `user.json` | `{"user_id", "server", "created_at"}` |
-| `pending.json` | `{"task_ids": [...]}`: uploaded, result not collected yet |
-| `tasks/<task_id>.json` | One photo: `status`, `notice`, `error`, `pieces_found`, `pieces_accepted`, `pieces[]` (each with `score`, `accepted`, `low_confidence`, `key`, `ldraw_part`, `ldraw_color`, `name`, `designable`, `crop_url`, `ldraw_image_url`, `bbox`, `candidates`) |
-| `parts.json` | The inventory, see below |
-| `parts.json.bak` | The previous `parts.json` |
-| `inventory.png` | One overview picture of the inventory, refreshed with `parts.json` |
+| `user.json` | `{"user_id", "server", "created_at"}`: the user's ID |
+| `pending.json` | `{"task_ids": [...]}`: uploaded, result not collected by the script yet |
+| `tasks/<task_id>.json` | One photo's full result (`status`, `notice`, `error`, `pieces[]` with `score`, `accepted`, `low_confidence`, `key`, `ldraw_part`, `ldraw_color`, `name`, `designable`, `crop_url`, `ldraw_image_url`, `bbox`, `candidates`) |
+| `parts.json`, `parts.json.bak` | The inventory as last fetched by the script, and the copy before |
+| `inventory.png` | The overview picture, refreshed with `parts.json` |
 | `images/ldraw/<part>_<colour>.png`, `images/crops/<task>_<nnn>.jpg` | Downloaded with `--images` |
 | `moc/DESIGN_GUIDE.md`, `moc/connectors.txt` | Written by `moc guide` |
-| `moc/pending.json` | `{"moc_ids": [...]}`: submitted, check result not collected yet |
-| `moc/<moc_id>/v<N>.ldr` | The file submitted as version N |
-| `moc/<moc_id>/report.v<N>.json`, `moc/<moc_id>/result.json` | The server's answer for version N (`status`, `url`, `parts`, `steps`, `report.issues[]` with `rule`, `severity`, `message`, `hint`, `parts[]` of `index`, `line`, `part`, `color`, `pos`); `result.json` is the latest one fetched |
+| `moc/pending.json` | `{"moc_ids": [...]}`: submitted with the script, result not collected yet |
+| `moc/<moc_id>/v<N>.ldr`, `report.v<N>.json`, `result.json` | The file submitted as version N, the server's answer for it, and the latest answer fetched |
 
-`parts.json`:
-
-```json
-{
-  "user_id": "k7m2x9qp", "updated_at": "2026-11-21T08:05:00Z", "pending_tasks": 0, "total_quantity": 57,
-  "inventory_url": "https://…/skill/u/k7m2x9qp",
-  "items": [
-    {"key": "3001|4", "ldraw_part": "3001", "ldraw_color": 4, "color_name": "Red", "color_hex": "#C91A09",
-     "bricklink_id": "3001", "name": "Brick 2 x 4", "quantity": 3, "designable": true, "min_score": 0.74,
-     "low_confidence": false, "ldraw_image_url": "https://…/3001/4.png", "crop_url": "https://…/007.jpg",
-     "ref_image_url": "https://…", "piece_ids": ["t4h7…/007"],
-     "local_ldraw_image": "/home/me/.lego-parts/images/ldraw/3001_4.png", "local_crop": "/home/me/…/t4h7…_007.jpg"}
-  ],
-  "fetched_at": "2026-11-21T08:05:03Z", "local_pending_tasks": 0
-}
-```
-
-Only pieces the server is fairly sure of are counted: score at least 0.60 and a clean cut-out; in a photo flagged
-`pile_photo` at least 0.80, so such a photo adds few parts (the rest are in `tasks/<task_id>.json` with `accepted: false`). Rows come designable first, then by quantity. `key` is
-`<ldraw_part>|<ldraw_color>`; a half that could not be converted reads `bl:<BrickLink id>`, and then the
-matching `ldraw_*` field is null. `local_*` fields exist only after `--images` and are null when a download failed;
-they are not sent with a MOC.
+`parts.json` rows (`items[]`): `key` (`<ldraw_part>|<ldraw_color>`; a half that could not be converted reads
+`bl:<BrickLink id>` and the matching `ldraw_*` field is null), `ldraw_part`, `ldraw_color`, `color_name`,
+`color_hex`, `bricklink_id`, `name`, `quantity`, `designable`, `min_score`, `low_confidence`, `ldraw_image_url`,
+`crop_url`, `piece_ids`; since v2.0 also `scanned_quantity`, `edited`, `confirmed`, `category`; after `--images`
+`local_ldraw_image` and `local_crop` (null when a download failed; never sent with a model). Top level:
+`user_id`, `updated_at`, `pending_tasks`, `total_quantity`, `inventory_url`, `fetched_at`, `local_pending_tasks`.
+Only pieces the server is fairly sure of are counted (score at least 0.60 and a clean cut-out; at least 0.80 in a
+photo flagged `pile_photo`); rows come designable first, then by quantity.
