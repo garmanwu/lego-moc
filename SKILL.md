@@ -1,7 +1,7 @@
 ---
 name: lego-moc
 description: Recognise loose LEGO parts from photos into a parts inventory, then design a LEGO model (MOC) from those parts as an LDraw file and have a server verify it physically - it returns fix notes, or a public page with a 3D preview and step-by-step building instructions. Works through MCP tools (scan_photos, inventory, submit_model and others) or a fallback Python script. Use when the user wants to identify, scan or count LEGO pieces from photos, build, show or correct a parts inventory, design or build a MOC from parts they own (a car, a house, a description, a picture), check, validate or verify a LEGO model or .ldr file, or get building instructions or a 3D preview for it. Chinese triggers - 乐高零件识别, 识别乐高零件, 拍照识别积木, 乐高零件清单, 零件库存, 用我有的零件设计 MOC, 设计乐高作品, 检验 MOC, 检查乐高模型能不能拼, 拼装步骤, 搭建说明, 3D 预览.
-version: 2.0.0
+version: 2.0.1
 metadata:
   openclaw:
     emoji: "🧱"
@@ -146,19 +146,38 @@ The user may give a subject ("a car"), a detailed description, a reference pictu
   photo of parts that were already counted counts them again: suggest photographing parts not scanned yet, or
   correcting the quantities afterwards with `set_quantity`.
 
-## 4. Use many parts, then refine
+## 4. Design first, then use many parts
 
-- **Target:** use at least 60% of the usable pieces (`usage.target_percent`) unless the user asked for something
-  small. Usable = designable and not low-confidence, or confirmed. `usage.percent` in every submission result shows
-  where you are, and `usage.unused` lists what is left, most plentiful first.
-- **Stage the work.** Version 1: the main structure (base, body, the big shapes). Later versions add detail in
-  large steps: roof finishing, windows and doors, railings, decoration, a base plate or ground. Only 5 resubmissions
-  exist per model, so each round must add a lot; don't spend one on a single part.
-- **Every result:** read `usage` and `unused` and ask which unused parts would make the subject better. On a pass,
-  look at both previews and fix what looks wrong: a random mix of colours, bare studs on top, a lopsided shape where
-  the subject is symmetric, a flat box. The guide's advice section says how.
-- Stop when the model is good and the target is met, when the inventory cannot add anything sensible, or when the
-  resubmissions are used up. Tell the user the final usage.
+The user wants a model that looks striking. Using many parts is a means to that (more size, more detail, more
+presence) and never the goal. A pyramid, tower, wall or block of mixed-colour bricks that merely uses up the
+inventory is a failure, however high its `usage.percent`. A smaller model with an idea and a clean colour scheme
+beats it every time.
+
+- **Concept before parts.** Decide what the model is and what makes it recognisable (its silhouette and two or
+  three signature features) before you place anything. If you cannot name the subject in a few words and say what
+  a viewer notices first, you have no design yet. Generic stacked shapes (pyramid, tower, cube, plain wall) are not
+  a concept unless the user asked for exactly that.
+- **Colour plan before parts.** Count the usable pieces per colour. Pick one dominant colour, one secondary and one
+  accent from the colours the inventory has most of, and give each a region (for example walls, roof, trim). Parts
+  in other colours go only where they cannot be seen (inside, underneath, the core of a thick wall) or stay unused.
+  Leaving parts out because they would spoil the colours is the right call.
+- **Spend extra parts on richness, not bulk.** Good uses: detail (windows, doors, trim lines, texture from plates
+  between bricks, slopes and round parts on edges), depth (overhangs, recesses, layered fronts), and a scene around
+  the subject (a base, a path, a garden, a fence, small side builds joined to the base). Bad uses: more layers of
+  the same thing, filling the inside solid, stacking leftovers on top, widening a shape just to place more bricks.
+- **`usage` is a gauge, not a quota.** `usage.percent` shows how much of the usable inventory (designable and not
+  low-confidence, or confirmed) the model uses; `usage.unused` lists what is left. A rich model from a good
+  inventory often reaches about 60% (`usage.target_percent`); below that, ask whether the subject could carry more
+  detail or a scene. If the colour plan and the subject only allow 30%, stop at 30%.
+- **Stage the work.** Version 1: the main structure in the planned colours (base, body, the big shapes). Later
+  versions add a whole layer of detail at once. Only 5 resubmissions exist per model, so each round must add a lot;
+  don't spend one on a single part.
+- **Review every pass like a designer.** Look at both previews and ask: is the subject recognisable at a glance?
+  Does the colour plan hold, or is it speckled? Does every part you added have a reason? Is the top finished rather
+  than bare studs? Is it symmetric where the subject is? Remove or replace what fails these, even if usage drops.
+- **Tell the user** the idea, the colours you chose, the final usage, and what you left out and why (for example
+  "the 14 orange and lime pieces would have clashed"). If more parts of some colour or shape would lift the model,
+  say which, so they know what to scan next.
 
 ## 5. Script fallback
 

@@ -1814,7 +1814,10 @@ MCP_INSTRUCTIONS = (
     "misidentified: rely on them only after the user confirms them (edit_inventory op confirm). Say a model can be "
     "built only when its status is passed; passing means it is physically consistent in the verifier's simulation, "
     "not that the real build is guaranteed to hold. The model link is public. At most 5 resubmissions per model. "
-    "Use only usable parts and aim to use at least 60% of them unless the user asked for something small. "
+    "Use only usable parts. Design comes first: a recognisable subject and a planned colour scheme (one dominant, "
+    "one secondary, one accent colour from what the inventory has most of). Use many parts to add detail and "
+    "presence (a rich model often uses about 60% of the usable pieces), never to pad: a pyramid, tower or block of "
+    "mixed colours that just uses up the inventory is a failure; leave out parts that would spoil the design. "
     "The user ID and every link containing it (inventory_url) are credentials: never post them anywhere public. "
     "A photo uploaded before is refused (duplicate_photo) and not recognised again; a new photo of parts already "
     "scanned counts them twice.")
@@ -1880,8 +1883,8 @@ def offline_tools():
                      'offset is 0, an overview picture. Rules: whenever you show the inventory to the user, show '
                      'the overview picture and give the inventory_url, where the user can see the photos and fix '
                      "rows; the inventory_url contains the user's ID, never post it anywhere public. Design only "
-                     'with usable rows unless the user says otherwise, and aim to use at least 60% of the usable '
-                     'pieces.',
+                     'with usable rows unless the user says otherwise. Before designing, count the pieces per '
+                     'colour and plan a colour scheme from the most plentiful ones.',
       'inputSchema': {'type': 'object',
                       'properties': {'filter': {'type': 'string',
                                                 'enum': ['all', 'usable', 'low_confidence'],
@@ -1947,8 +1950,9 @@ def offline_tools():
       'description': 'The design guide for LDraw models this server can check: file format, coordinates, how parts '
                      'connect, every check rule and how to declare moving parts. Also returns the size of this '
                      "ID's usable inventory and the usage target. Read it before writing a model. Rules: design "
-                     'only with usable parts unless the user says otherwise, and aim to use at least 60% of the '
-                     'usable pieces.',
+                     'only with usable parts unless the user says otherwise. Design first (subject, silhouette, '
+                     'colour plan), then use many parts for detail and presence; about 60% usage is a gauge of a '
+                     'rich model, not a quota, and never a reason to pad.',
       'inputSchema': {'type': 'object', 'properties': {}},
       'annotations': {'readOnlyHint': True, 'openWorldHint': False}},
      {'name': 'connectors',
