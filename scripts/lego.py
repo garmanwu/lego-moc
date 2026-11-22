@@ -26,6 +26,7 @@ import errno
 import glob
 import hashlib
 import http.client
+import io
 import json
 import mimetypes
 import os
@@ -41,6 +42,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +52,7 @@ from pathlib import Path
 DEFAULT_SERVER = "https://136.117.205.131"
 PLACEHOLDER = "__LEGO_" + "SERVER__"  # split in two so the installer's replacement leaves it alone
 
-VERSION = "0.4"
+VERSION = "0.5"
 IMAGE_THREADS = 8
 API_PREFIX = "/skill/v1"
 MAX_PHOTOS = 30
@@ -883,7 +885,8 @@ def fetch_image(ctx, rep, url, folder, name_for):
         return None
     dest = folder / name_for(url)
     if dest.is_file() and dest.stat().st_size > 0:
-        rep["images"]["present"] += 1
+        if str(dest) not in ctx.get("_bundled", ()):   # those were counted as downloaded already
+            rep["images"]["present"] += 1
         return str(dest)
     try:
         status, body = request_with_retry("GET", url)  # media needs no user header
@@ -897,6 +900,30 @@ def fetch_image(ctx, rep, url, folder, name_for):
     return str(dest)
 
 
+def fetch_bundle(ctx, rep, jobs):
+    """Get all missing pictures in one request (images.zip); whatever it lacks is then fetched one by one.
+    Only entries whose names this client computed itself are written, so the archive cannot place files elsewhere."""
+    wanted = {}
+    for row, _field, url, folder, namer in jobs:
+        if isinstance(url, str) and url:
+            dest = folder / namer(row, urllib.parse.urljoin(ctx["server"] + "/", url))
+            if not (dest.is_file() and dest.stat().st_size > 0):
+                wanted["{}/{}".format(folder.name, dest.name)] = dest
+    if len(wanted) < 8:
+        return
+    try:
+        _status, raw = api_raw(ctx, "GET", "/parts/images.zip", timeout=UPLOAD_TIMEOUT_S, accept="application/zip")
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            for name in z.namelist():
+                dest = wanted.get(name)
+                if dest is not None and 0 < z.getinfo(name).file_size <= 20 * 1024 * 1024:
+                    write_atomic(dest, z.read(name))
+                    rep["images"]["downloaded"] += 1
+                    ctx.setdefault("_bundled", set()).add(str(dest))
+    except (ApiError, Fatal, OSError, zipfile.BadZipFile, ValueError):
+        pass  # an older server, or a broken download: fall back to one request per picture
+
+
 def download_images(ctx, rep, items):
     """Download both pictures of every row, IMAGE_THREADS at a time (an inventory can have over a thousand)."""
     root = ctx["home"] / "images"
@@ -905,6 +932,7 @@ def download_images(ctx, rep, items):
         if isinstance(row, dict):
             jobs.append((row, "local_ldraw_image", row.get("ldraw_image_url"), root / "ldraw", ldraw_image_name))
             jobs.append((row, "local_crop", row.get("crop_url"), root / "crops", crop_image_name))
+    fetch_bundle(ctx, rep, jobs)
     lock, position = threading.Lock(), [0]
 
     def work():
