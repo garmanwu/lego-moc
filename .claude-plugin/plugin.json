@@ -1,0 +1,37 @@
+{
+  "name": "lego-moc",
+  "version": "2.1.0",
+  "description": "Scan loose LEGO parts from photos into an inventory, then design a LEGO model (MOC) from your parts or as a free build, physically verified, with a 3D page and building steps.",
+  "author": {
+    "name": "garmanwu",
+    "url": "https://github.com/garmanwu"
+  },
+  "homepage": "https://github.com/garmanwu/lego-moc",
+  "repository": "https://github.com/garmanwu/lego-moc",
+  "license": "MIT-0",
+  "keywords": [
+    "lego",
+    "moc",
+    "ldraw",
+    "bricks",
+    "3d",
+    "building-instructions"
+  ],
+  "skills": [
+    "./"
+  ],
+  "mcpServers": {
+    "lego-moc": {
+      "command": "python3",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/lego.py",
+        "mcp"
+      ]
+    }
+  },
+  "network": {
+    "hosts": [
+      "lego.groundrl.com"
+    ]
+  }
+}

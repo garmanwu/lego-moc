@@ -14,7 +14,20 @@ Works with any agent that can run Python 3 and reach the internet: Claude Code, 
 
 ## Install
 
-Clone this repository into your agent's skills folder. For Claude Code:
+**Claude Code (plugin).** Installs the skill and connects the MCP tools in one go, so the setup step below is not needed:
+
+```
+/plugin marketplace add garmanwu/lego-moc
+/plugin install lego-moc@lego-moc
+```
+
+**Any agent, with [skills.sh](https://skills.sh).** Works for Claude Code, Codex, Cursor and others:
+
+```bash
+npx skills add garmanwu/lego-moc
+```
+
+**By hand.** Clone this repository into your agent's skills folder. For Claude Code:
 
 ```bash
 git clone https://github.com/garmanwu/lego-moc ~/.claude/skills/lego-moc

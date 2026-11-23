@@ -1,0 +1,15 @@
+{
+  "name": "lego-moc",
+  "owner": {"name": "garmanwu", "url": "https://github.com/garmanwu"},
+  "metadata": {"description": "LEGO parts recognition and MOC design skill", "version": "2.1.0"},
+  "plugins": [
+    {
+      "name": "lego-moc",
+      "source": "./",
+      "description": "Scan loose LEGO parts from photos into an inventory, then design a LEGO model (MOC) from your parts or as a free build, physically verified, with a 3D page and building steps.",
+      "version": "2.1.0",
+      "category": "creative",
+      "keywords": ["lego", "moc", "ldraw"]
+    }
+  ]
+}
