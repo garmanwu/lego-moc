@@ -61,6 +61,21 @@ Agents that cannot start a local program can use the remote endpoint instead (`p
 
 Without the MCP setup the skill still works through the script, as in 1.x.
 
+### Get a user ID
+
+获取用户 ID（WorkBuddy 连接器等托管接入需要填写）
+
+The script creates a user ID by itself the first time it runs, so most people never need this. Hosted connectors that only talk to the remote endpoint (for example the WorkBuddy connector) ask you to type the ID in. Two ways to get one:
+
+- Already use this skill on your computer: run `python3 scripts/lego.py whoami` and copy the ID it shows. The connector then sees the same inventory and models.
+- No install: run this once in a terminal (on Windows use `curl.exe`) and copy the 8-character `user_id` from the answer.
+
+  ```bash
+  curl -X POST https://lego.groundrl.com/skill/v1/users
+  ```
+
+The ID is free and needs no sign-up. Keep it private: anyone who has it can see and change your inventory. At most 5 new IDs per network address per day.
+
 ## Use
 
 Ask your agent, for example:
